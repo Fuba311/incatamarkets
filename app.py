@@ -192,7 +192,7 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
     
     html.Div(style=section_style, children=[
         html.H2("Produce Flow Network", style={'color': '#004085', 'border-bottom': '2px solid #b8daff', 'padding-bottom': '10px'}),
-        html.P("This map shows the origin and flow of tomatoes. Use the toggles to show/hide roads, nightlights, and the market network.", style={'marginBottom': '20px'}),
+        html.P("This map shows the origin and flow of tomatoes. Use the toggles to show/hide roads, nightlights, and the market network. The origins of tomatoes' (Red dots) position are approximations only. Please be patient when selecting any option that will dynamically update the map, as this website is hosted on a free instance and may be slow at times. ", style={'marginBottom': '20px'}),
         html.Div(style={'display': 'flex', 'flex-direction': 'column', 'gap': '25px'}, children=[
             html.Div(style={'display': 'flex', 'gap': '30px', 'align-items': 'center', 'flex-wrap': 'wrap'}, children=[
                 html.Div(children=[
@@ -214,7 +214,7 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
                     dcc.Input(id='opacity-input', type='number', min=0, max=100, step=10, value=70, style={'width': '70px', 'padding': '5px', 'borderRadius': '4px', 'border': '1px solid #ccc'}),
                 ]),
             ]),
-            html.Div(style={'paddingTop': '15px', 'borderTop': '1px solid #ddd', 'marginTop': '15px'}, children=[
+            html.Div(style={'paddingTop': '15px', 'borderTop': '1px solid #ddd', 'marginTop': '15px', 'marginBottom': '25px'}, children=[
                 html.Label("Map Overlays:", style={'fontWeight': 'bold'}),
                 dcc.Checklist(id='layer-toggles',
                               options=[
