@@ -215,7 +215,7 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
                 ]),
             ]),
             html.Div(style={'paddingTop': '15px', 'borderTop': '1px solid #ddd', 'marginTop': '15px', 'marginBottom': '25px'}, children=[
-                html.Label("Map Overlays:", style={'fontWeight': 'bold'}),
+                html.Label("Map Overlays:", style={'fontWeight': 'bold', 'marginRight': '15px'}),
                 dcc.Checklist(id='layer-toggles',
                               options=[
                                   {'label': 'Show Markets & Origins', 'value': 'show_markers'},
@@ -230,9 +230,13 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
             html.Button('How to Read This Map', id='network-info-button', n_clicks=0, style={'marginBottom': '10px', 'cursor': 'pointer', 'border': '1px solid #004085', 'backgroundColor': '#e7f3ff', 'padding': '5px 10px', 'borderRadius': '5px'}),
             html.Div(id='network-info-collapse', children=[
                 dcc.Markdown('''
-                    * **Red Dots (Produce Origins):** These represent the counties or areas where tomatoes are sourced.
-                    * **Blue Dots (Markets):** These are the markets where tomatoes are sold.
-                    * **Lines (Trade Routes):** These connect an origin to a market.
+                    * **Red Dots (Produce Origins):** These represent the counties or areas where tomatoes are sourced. <br>
+                    * **Blue Dots (Markets):** These are the markets where tomatoes are sold. <br>
+                    * **Lines (Trade Routes):** These connect an origin to a market. The color and thickness show the share of that market's tomatoes that come from the connected origin. <br>
+                        * **Orange (Thick):** High Share - Over 75% of the market's supply comes from this origin.
+                        * **Purple (Medium):** Medium Share - Between 25% and 75% of the supply comes from this origin.
+                        * **Green (Thin):** Low Share - Less than 25% of the supply comes from this origin. <br>
+                    * Units of tomatoes shown are the ones traded on a typical day during the selected season
                     ''', style={'padding': '15px', 'border': '1px dashed #cce5ff', 'borderRadius': '5px', 'backgroundColor': '#f8f9fa'})
             ], style={'display': 'none'})
         ]),
