@@ -1,0 +1,12 @@
+dash
+pandas
+numpy
+geopandas
+rasterio
+pathlib
+Pillow
+shapely
+plotly
+dash-extensions
+diskcache
+gunicorn
