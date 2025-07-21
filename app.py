@@ -1,5 +1,6 @@
 # filename: app.py
-print("--- STARTING APP: v2 (RENDER DEPLOYMENT) ---")
+# --- FINAL VERSION FOR RENDER DEPLOYMENT WITH REDIS CACHING ---
+
 import dash
 from dash import dcc, html, callback_context, no_update
 from dash.dependencies import Input, Output, State
@@ -14,17 +15,21 @@ from PIL import Image
 import io
 import base64
 from shapely.geometry import Polygon
+import os
+from flask_caching import Cache
 
-# --- Caching Setup ---
-# pip install dash-extensions diskcache
-from dash.long_callback import DiskcacheManager
-import diskcache
+# --- App and Cache Initialization ---
+app = dash.Dash(__name__)
+server = app.server # Expose server for Gunicorn
 
-# Create a cache directory and a manager for it
-cache = diskcache.Cache("./cache")
-long_callback_manager = DiskcacheManager(cache)
+# Configure Flask-Caching to use Redis
+# It reads the REDIS_URL from the environment variable you set on Render.
+cache = Cache(app.server, config={
+    'CACHE_TYPE': 'RedisCache',
+    'CACHE_REDIS_URL': os.environ.get('REDIS_URL', 'redis://localhost:6379')
+})
 
-# --- 1. DATA LOADING AND PREPARATION (WITH CACHING) ---
+# --- 1. DATA LOADING AND PREPARATION ---
 
 # Set up a relative path to the 'data' directory
 DATA_FOLDER = Path(__file__).parent / "data"
@@ -36,8 +41,7 @@ PATH_TOMATO_LOW = DATA_FOLDER / "Module B1_Tomato seasonality_low.dta"
 PATH_VEHICLE = DATA_FOLDER / "Module B3_Tomato vehicles.dta"
 PATH_TRADER = DATA_FOLDER / "Module D1_Trader composition.dta"
 
-# Use a decorator to cache the output of this slow function
-@cache.memoize()
+@cache.memoize(timeout=7200) # Caches result for 2 hours
 def load_stata_manual(path, categorical_cols_map):
     """Loads a Stata file and manually applies value labels."""
     print(f"CACHE MISS: Loading and processing {path}...")
@@ -53,18 +57,15 @@ def load_stata_manual(path, categorical_cols_map):
         print(f"Error loading {path}: {e}")
         return pd.DataFrame()
 
-# Use a decorator to cache the entire data preparation process
-@cache.memoize()
+@cache.memoize(timeout=7200) # Caches result for 2 hours
 def prepare_all_data():
     """A single function to load and process all dataframes, whose result will be cached."""
     print("CACHE MISS: Preparing all data from scratch...")
     
-    # --- Load Base and Network Data ---
     df_id = load_stata_manual(PATH_ID, {'mkt_name': 'mkt_name111', 'county_id': 'a91', 'mkt_type': 'market_type111'})
     df_tomato_high_raw = load_stata_manual(PATH_TOMATO_HIGH, {'tomhigh_id': 'tomhigh_id111'})
     df_tomato_low_raw = load_stata_manual(PATH_TOMATO_LOW, {'tomlow_id': 'tomhigh_id111'})
 
-    # --- Prepare Network Data ---
     df_tomato_high = df_tomato_high_raw[['mkt_id', 'tomhigh_id', 'b103', 'b104', 'b105']].copy()
     df_tomato_high.rename(columns={'tomhigh_id': 'origin_name', 'b103': 'Now', 'b104': '5 Yrs Ago', 'b105': '10 Yrs Ago'}, inplace=True)
     df_tomato_high['season'] = 'High Season'
@@ -83,7 +84,6 @@ def prepare_all_data():
     network_df['origin_lon'] = network_df['origin_name'].map(lambda x: origin_coords.get(str(x), {}).get('lon'))
     network_df.dropna(subset=['origin_lat', 'origin_lon'], inplace=True)
 
-    # --- Prepare Market Volume Data ---
     df_vehicle = load_stata_manual(PATH_VEHICLE, {'tomaveh_id': 'tomaveh_id111'})
     df_vehicle.fillna(0, inplace=True)
     df_vehicle['vol_high_now'] = df_vehicle['b301'] * df_vehicle['b300']
@@ -105,7 +105,6 @@ def prepare_all_data():
     market_volume_df = pd.merge(market_volume_df, df_id, on='mkt_id', how='left')
     market_volume_df.rename(columns={'n101latitude': 'lat', 'n101longitude': 'lon'}, inplace=True)
 
-    # --- Prepare Trader Data ---
     df_id_trader = df_id[['mkt_id', 'mkt_name', 'mkt_type', 'county_id', 'n101latitude', 'n101longitude']]
     df_trader_raw = load_stata_manual(PATH_TRADER, {'trader_id': 'trader_id111'})
     df_trader_selected_cols = df_trader_raw[['mkt_id', 'trader_id', 'd105', 'd107', 'd109']].copy()
@@ -119,8 +118,7 @@ def prepare_all_data():
     
     return network_df, market_volume_df, trader_df, trends_base_df
 
-# Use a decorator to cache the geospatial data processing
-@cache.memoize()
+@cache.memoize(timeout=7200) # Caches result for 2 hours
 def load_geospatial_data():
     """Loads and processes all geospatial files, whose result will be cached."""
     print("CACHE MISS: Loading and processing geospatial data...")
@@ -133,7 +131,6 @@ def load_geospatial_data():
     clip_mask = gpd.GeoDataFrame([1], geometry=[kenya_polygon], crs="EPSG:4326")
 
     for key, file_suffix in time_period_map.items():
-        # Load and Clip Roads
         road_path = DATA_FOLDER / f"roads_{file_suffix}.geojson"
         if road_path.exists():
             roads_gdf = gpd.read_file(road_path)
@@ -146,7 +143,6 @@ def load_geospatial_data():
         else:
             print(f"Warning: Road file not found at {road_path}")
 
-        # Load and convert Nightlights
         nightlight_path = DATA_FOLDER / f"nightlights_{file_suffix}.tif"
         if nightlight_path.exists():
             with rasterio.open(nightlight_path) as src:
@@ -170,25 +166,17 @@ def load_geospatial_data():
     return roads_data, nightlights_data
 
 # --- Load all data on app start ---
-# On the first run, these functions will execute and store their results in the cache.
-# On subsequent runs, the results will be loaded directly from the cache, which is much faster.
 network_df, market_volume_df, trader_df, trends_base_df = prepare_all_data()
 roads_data, nightlights_data = load_geospatial_data()
 print("All data loaded and ready.")
 
-# --- 2. DASH APP LAYOUT ---
-app = dash.Dash(__name__, long_callback_manager=long_callback_manager)
-app.title = "Kenya Market Analysis"
 
-# Add this line for Render deployment
-server = app.server
+# --- 2. DASH APP LAYOUT ---
+app.title = "Kenya Market Analysis"
 
 section_style = {'background-color': '#f0f8ff', 'border': '1px solid #cce5ff', 'border-radius': '10px', 'padding': '25px', 'box-shadow': '2px 2px 10px lightgrey', 'margin-bottom': '40px'}
 title_style = {'textAlign': 'center', 'color': '#333333', 'marginBottom': '20px'}
 
-# THE REST OF YOUR LAYOUT CODE IS IDENTICAL
-# ... PASTE YOUR EXISTING app.layout HERE ...
-# For brevity, I've omitted the layout, but you should copy it exactly as it was.
 app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-serif", 'padding': '2% 5%', 'background-color': '#f8f9fa'}, children=[
     
     html.Div([
@@ -312,12 +300,7 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
 
 
 # --- 3. DASH CALLBACKS ---
-# The callbacks do not need to be changed because the dataframes
-# (network_df, trader_df, etc.) are now loaded into memory from the cache when the app starts.
-# All filtering happens on these already-loaded dataframes, which is very fast.
 
-# ... PASTE ALL YOUR EXISTING CALLBACKS HERE ...
-# For brevity, I've omitted them, but you should copy them exactly as they were.
 @app.callback(
     Output('network-info-collapse', 'style'),
     Input('network-info-button', 'n_clicks'),
@@ -588,5 +571,4 @@ def update_trends_chart(selected_market_type, selected_trader, grouping_level, s
 
 # --- 4. RUN THE APP ---
 if __name__ == '__main__':
-    # Set debug=False for deployment
     app.run(debug=False)
