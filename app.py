@@ -445,12 +445,7 @@ def sync_opacity_controls(input_val, slider_val):
     triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
     return (input_val, input_val) if triggered_id == 'opacity-input' else (slider_val, slider_val)
 
-@app.callback(
-    [Output('trader-map', 'figure'),
-     Output('trader-map-title', 'children')],
-    [Input('master-market-type-filter', 'value'), Input('trader-type-dropdown', 'value'), Input('time-slider', 'value')],
-    [State('trader-map', 'relayoutData')]
-)
+
 # --- AFTER ---
 @app.callback(
     [Output('trader-map', 'figure'),
