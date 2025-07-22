@@ -180,8 +180,9 @@ title_style = {'textAlign': 'center', 'color': '#333333', 'marginBottom': '20px'
 app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-serif", 'padding': '2% 5%', 'background-color': '#f8f9fa'}, children=[
     
     html.Div([
-        html.H1("Tegemeo Market Analysis Dashboard", style={'textAlign': 'center', 'color': '#004085'}),
+        html.H1("INCATA Market Analysis Dashboard", style={'textAlign': 'center', 'color': '#004085'}),
         html.H4("A Public Dashboard for Markets Studied under Project INCATA", style={'textAlign': 'center', 'fontWeight': 'normal'}),
+        html.H4("In Collaboration with RIMISP, Michigan State University, International Food Policy Research Institute and Tegemeo Institute", style={'textAlign': 'center', 'fontWeight': 'normal'}),
         html.P("Linked Farms and Enterprises for Inclusive Agricultural Transformation in Africa and Asia", style={'textAlign': 'center', 'fontStyle': 'italic', 'color': '#6c757d', 'marginTop': '-10px'})
     ], style={'marginBottom': '40px'}),
 
