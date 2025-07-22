@@ -257,7 +257,7 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
             ]),
         ]),
         html.H3(id='trader-map-title', style=title_style),
-        dcc.Graph(id='trader-map', style={'height': '85vh'}),
+        dcc.Graph(id='trader-map', style={'height': '85vh'}, config={'scrollZoom': True}),
     ]),
 
     html.Div(style=section_style, children=[
@@ -274,7 +274,7 @@ app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-se
             ]),
         ]),
         html.H3(id='volume-map-title', style=title_style),
-        dcc.Graph(id='volume-map', style={'height': '85vh'}),
+        dcc.Graph(id='volume-map', style={'height': '85vh'}, config={'scrollZoom': True}),
     ]),
     
     html.Div(style=section_style, children=[
