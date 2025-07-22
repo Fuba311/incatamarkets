@@ -451,7 +451,16 @@ def sync_opacity_controls(input_val, slider_val):
     [Input('master-market-type-filter', 'value'), Input('trader-type-dropdown', 'value'), Input('time-slider', 'value')],
     [State('trader-map', 'relayoutData')]
 )
-def update_trader_map(selected_market_type, selected_trader, time_value, relayout_data):
+# --- AFTER ---
+@app.callback(
+    [Output('trader-map', 'figure'),
+     Output('trader-map-title', 'children')],
+    [Input('master-market-type-filter', 'value'), 
+     Input('trader-type-dropdown', 'value'), 
+     Input('time-slider', 'value')],
+    [State('trader-map', 'relayoutData')]  # <-- ADD THIS
+)
+def update_trader_map(selected_market_type, selected_trader, time_value, relayout_data): # <-- AND ADD relayout_data
     df = trader_df.copy()
     if selected_market_type != 'All Markets': df = df[df['mkt_type'] == selected_market_type]
     
@@ -476,6 +485,7 @@ def update_trader_map(selected_market_type, selected_trader, time_value, relayou
     market_traders['hover_text'] = market_traders['mkt_name'] + '<br>' + market_traders[selected_time_col].astype(int).astype(str) + ' ' + selected_trader + '(s)'
     fig.add_trace(go.Scattermapbox(lat=market_traders['lat'], lon=market_traders['lon'], mode='markers', marker=go.scattermapbox.Marker(size=(4 + (market_traders[selected_time_col]**0.5) * 1.5), color=market_traders[selected_time_col], colorscale='Plasma', cmin=0, cmax=market_traders[selected_time_col].quantile(0.95), showscale=True, colorbar_title_text='No. of Traders'), text=market_traders['hover_text'], hoverinfo='text'))
     
+    # vvv ADD THIS LOGIC BLOCK vvv
     zoom = 5.5
     center = {"lat": 0.5, "lon": 37.5}
     if relayout_data and 'mapbox.center' in relayout_data:
@@ -485,15 +495,16 @@ def update_trader_map(selected_market_type, selected_trader, time_value, relayou
     fig.update_layout(mapbox_style="carto-positron", mapbox_zoom=zoom, mapbox_center=center, margin={"r":0, "t":0, "l":0, "b":0})
     return fig, map_title
 
+# --- AFTER ---
 @app.callback(
     [Output('volume-map', 'figure'),
      Output('volume-map-title', 'children')],
     [Input('master-market-type-filter', 'value'),
      Input('volume-season-toggle', 'value'),
      Input('volume-time-slider', 'value')],
-    [State('volume-map', 'relayoutData')]
+    [State('volume-map', 'relayoutData')] # <-- ADD THIS
 )
-def update_volume_map(selected_market_type, selected_season, time_value, relayout_data):
+def update_volume_map(selected_market_type, selected_season, time_value, relayout_data): # <-- AND ADD relayout_data
     df = market_volume_df.copy()
     if selected_market_type != 'All Markets':
         df = df[df['mkt_type'] == selected_market_type]
@@ -524,6 +535,7 @@ def update_volume_map(selected_market_type, selected_season, time_value, relayou
         text=df['hover_text'], hoverinfo='text'
     ))
     
+    # vvv ADD THIS LOGIC BLOCK vvv
     zoom = 5.5
     center = {"lat": 0.5, "lon": 37.5}
     if relayout_data and 'mapbox.center' in relayout_data:
