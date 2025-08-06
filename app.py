@@ -1,5 +1,6 @@
 # filename: app.py
-# --- FINAL, CORRECTED VERSION FOR RENDER DEPLOYMENT ---
+# --- FINAL, CORRECTED VERSION FOR RENDER DEPLOYMENT - v3 ---
+# This version fixes the legend position and restores the 'How to Read This Map' section.
 
 import dash
 from dash import dcc, html, callback_context, no_update
@@ -82,6 +83,22 @@ else:
         html.Div(style=section_style, children=[
             html.H2("Produce Flow Network", style={'color': '#004085', 'border-bottom': '2px solid #b8daff', 'padding-bottom': '10px'}),
             html.P("This map shows the origin and flow of tomatoes. Use the toggles to show/hide roads, nightlights, and the market network. The origins of tomatoes' (Red dots) position are approximations only. Please be patient when selecting any option that will dynamically update the map, as this website is hosted on a free instance and may be slow at times.", style={'marginBottom': '20px'}),
+            
+            # <<< 'HOW TO READ THIS MAP' SECTION RESTORED HERE
+            html.Div(style={'marginTop': '20px', 'marginBottom': '20px'}, children=[
+                html.Button('How to Read This Map', id='network-info-button', n_clicks=0, style={'cursor': 'pointer', 'border': '1px solid #004085', 'backgroundColor': '#e7f3ff', 'padding': '5px 10px', 'borderRadius': '5px'}),
+                html.Div(id='network-info-collapse', children=[
+                    dcc.Markdown('''
+                        * **Red Dots (Produce Origins):** Size reflects the number of unique markets it supplies.
+                        * **Blue Dots (Markets):** Size reflects the total trade volume.
+                        * **Lines (Trade Routes):** Connects an origin to a market. Color and thickness show the share of that market's tomatoes that come from the connected origin:
+                            * **Orange (Thick):** High Share (>75%)
+                            * **Purple (Medium):** Medium Share (25-75%)
+                            * **Green (Thin):** Low Share (<25%)
+                        ''', style={'padding': '15px', 'marginTop': '10px', 'border': '1px dashed #cce5ff', 'borderRadius': '5px', 'backgroundColor': '#f8f9fa'})
+                ], style={'display': 'none'}) # Initially hidden
+            ]),
+
             html.Div(style={'position': 'relative', 'width': '100%'}, children=[
                 html.Div(id={'type': 'floating-panel-wrapper', 'index': 'network'}, className='floating-controls', children=[
                     html.Div(id={'type': 'panel-header', 'index': 'network'}, className='control-panel-header', n_clicks=0, children=[
@@ -155,7 +172,22 @@ else:
             return ('floating-controls icon-only', 'controls-content hidden') if 'icon-only' not in current_class else ('floating-controls', 'controls-content')
         return no_update, no_update
 
-    # ----- NETWORK MAP CALLBACK (CORRECT, DETAILED VERSION) -----
+    # <<< CALLBACK FOR 'HOW TO READ THIS MAP' RESTORED HERE
+    @app.callback(
+        Output('network-info-collapse', 'style'),
+        Input('network-info-button', 'n_clicks'),
+        State('network-info-collapse', 'style'),
+        prevent_initial_call=True
+    )
+    def toggle_network_info(n_clicks, current_style):
+        if n_clicks > 0:
+            if current_style.get('display') == 'none':
+                return {'display': 'block'}
+            else:
+                return {'display': 'none'}
+        return {'display': 'none'}
+
+    # ----- NETWORK MAP CALLBACK -----
     @app.callback(
         Output('network-map', 'figure'),
         [Input('master-market-type-filter', 'value'), Input('season-toggle', 'value'),
@@ -221,7 +253,12 @@ else:
         fig.update_layout(
             mapbox_style=map_style, mapbox_layers=mapbox_layers, mapbox_zoom=zoom, mapbox_center=center,
             margin={"r":0, "t":0, "l":0, "b":0}, showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor='rgba(255,255,255,0.85)', bordercolor='rgba(0,0,0,0.1)', borderwidth=1, traceorder='normal', itemsizing='constant', font=dict(size=11))
+            # <<< LEGEND POSITION FIXED HERE
+            legend=dict(
+                yanchor="top", y=0.99, xanchor="right", x=0.99, # Positioned to the top-right
+                bgcolor='rgba(255,255,255,0.85)', bordercolor='rgba(0,0,0,0.1)', borderwidth=1,
+                traceorder='normal', itemsizing='constant', font=dict(size=11)
+            )
         )
         return fig
 
