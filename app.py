@@ -1,6 +1,5 @@
 # filename: app.py
-# --- FINAL VERSION FOR RENDER DEPLOYMENT ---
-# This version uses pre-processed data for maximum efficiency.
+# --- FINAL, CORRECTED VERSION FOR RENDER DEPLOYMENT ---
 
 import dash
 from dash import dcc, html, callback_context, no_update
@@ -18,8 +17,7 @@ server = app.server # Expose server for Gunicorn
 app.title = "INCATA Market Analysis"
 
 # Load the pre-processed data from the 'processed_data' folder.
-# This is much faster and more memory-efficient than processing on the fly.
-print("Loading pre-processed data...")
+print("--- Loading Pre-Processed Data ---")
 PROCESSED_DATA_FOLDER = Path(__file__).parent / "processed_data"
 
 try:
@@ -32,7 +30,6 @@ try:
     nightlights_data = {}
     time_period_map = {"10 Yrs Ago": "10_yrs_ago", "5 Yrs Ago": "5_yrs_ago", "Now": "now"}
 
-    # Load pre-clipped and simplified roads
     for key, file_suffix in time_period_map.items():
         road_path = PROCESSED_DATA_FOLDER / f"roads_{file_suffix}_processed.geojson"
         if road_path.exists():
@@ -40,7 +37,6 @@ try:
             roads_data[key] = roads_gdf.__geo_interface__
     print("SUCCESS: Roads data (.geojson) loaded.")
 
-    # Load pre-rendered nightlight images and coordinates from JSON
     nightlight_path = PROCESSED_DATA_FOLDER / "nightlights_data.json"
     if nightlight_path.exists():
         with open(nightlight_path, 'r') as f:
@@ -50,16 +46,13 @@ try:
 except FileNotFoundError as e:
     print(f"---! FATAL ERROR !---")
     print(f"A required data file is missing: {e}")
-    print("Please run the `preprocess_data.py` script locally and ensure the `processed_data` folder is uploaded to Render.")
-    # Display an error message in the app layout if data is missing
+    print("Please run `preprocess_data.py` locally and ensure `processed_data` folder is uploaded.")
     app.layout = html.Div([
         html.H1("Application Error"),
         html.P(f"Could not load necessary data file: {e}. Please contact the administrator.")
     ])
-    # Prevent further execution if critical data is missing
 else:
-    print("All pre-processed data loaded successfully.")
-
+    print("--- All Data Loaded. Building Layout. ---")
 
     # --- 2. DASH APP LAYOUT ---
     section_style = {
@@ -72,7 +65,7 @@ else:
 
     app.layout = html.Div(style={'fontFamily': "'Segoe UI', 'Roboto', Arial, sans-serif", 'padding': '2% 5%', 'background-color': '#f8f9fa'}, children=[
         
-        # --- HEADER (FROM YOUR OLD APP) ---
+        # --- HEADER (FROM YOUR RENDER APP) ---
         html.Div([
             html.H1("INCATA Market Analysis Dashboard", style={'textAlign': 'center', 'color': '#004085'}),
             html.H4("A Public Dashboard for Markets Studied under Project INCATA", style={'textAlign': 'center', 'fontWeight': 'normal'}),
@@ -85,26 +78,23 @@ else:
             dcc.Dropdown(id='master-market-type-filter', options=[{'label': 'All Markets', 'value': 'All Markets'}] + [{'label': mtype, 'value': mtype} for mtype in sorted(network_df['mkt_type'].unique())], value='All Markets')
         ]),
         
-        # --- NEW NETWORK MAP SECTION ---
+        # --- NETWORK MAP SECTION ---
         html.Div(style=section_style, children=[
             html.H2("Produce Flow Network", style={'color': '#004085', 'border-bottom': '2px solid #b8daff', 'padding-bottom': '10px'}),
-            html.P("This map shows the origin and flow of tomatoes. Use the toggles to show/hide roads, nightlights, and the market network. The origins of tomatoes' (Red dots) position are approximations only. Please be patient when selecting any option that will dynamically update the map, as this website is hosted on a free instance and may be slow at times.", style={'marginBottom': '20px'}), # <-- YOUR TEXT
+            html.P("This map shows the origin and flow of tomatoes. Use the toggles to show/hide roads, nightlights, and the market network. The origins of tomatoes' (Red dots) position are approximations only. Please be patient when selecting any option that will dynamically update the map, as this website is hosted on a free instance and may be slow at times.", style={'marginBottom': '20px'}),
             html.Div(style={'position': 'relative', 'width': '100%'}, children=[
                 html.Div(id={'type': 'floating-panel-wrapper', 'index': 'network'}, className='floating-controls', children=[
                     html.Div(id={'type': 'panel-header', 'index': 'network'}, className='control-panel-header', n_clicks=0, children=[
-                        html.Span("⚙️", className='header-icon'),
-                        html.Span("Map Controls", className='header-text'),
-                        html.Button('−', className='toggle-btn')
+                        html.Span("⚙️", className='header-icon'), html.Span("Map Controls", className='header-text'), html.Button('−', className='toggle-btn')
                     ]),
                     html.Div(id={'type': 'panel-content', 'index': 'network'}, className='controls-content', children=[
-                        # Controls Content Here
-                        html.Label("📅 Time Period", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block'}),
+                        html.Label("📅 Time Period", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginBottom': '5px'}),
                         dcc.Slider(id='network-time-slider', min=0, max=2, marks={0: '10 Yrs Ago', 1: '5 Yrs Ago', 2: 'Now'}, value=2, step=None, included=False),
-                        html.Label("🌱 Season", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginTop': '20px'}),
+                        html.Label("🌱 Season", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginTop': '20px', 'marginBottom': '5px'}),
                         dcc.RadioItems(id='season-toggle', options=[{'label': ' High', 'value': 'High Season'}, {'label': ' Low', 'value': 'Low Season'}], value='High Season', labelStyle={'display': 'inline-block', 'marginRight':'15px'}),
-                        html.Label("🗺 Map Layers", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginTop': '20px'}),
+                        html.Label("🗺 Map Layers", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginTop': '20px', 'marginBottom': '5px'}),
                         dcc.Checklist(id='layer-toggles', options=[{'label': ' Markets & Origins', 'value': 'show_markers'}, {'label': ' Roads', 'value': 'show_roads'}, {'label': ' Nightlights', 'value': 'show_nightlights'}], value=['show_markers'], labelStyle={'display': 'block'}),
-                        html.Label("🔗 Trade Routes", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginTop': '20px'}),
+                        html.Label("🔗 Trade Routes", style={'fontWeight': 'bold', 'fontSize': '13px', 'display': 'block', 'marginTop': '20px', 'marginBottom': '5px'}),
                         dcc.Checklist(id='toggle-routes', options=[{'label': ' Show Trade Routes', 'value': 'show'}], value=['show']),
                     ]),
                 ]),
@@ -112,7 +102,7 @@ else:
             ]),
         ]),
         
-        # --- NEW COMBINED ANALYSIS MAP SECTION ---
+        # --- COMBINED ANALYSIS MAP SECTION ---
         html.Div(style=section_style, children=[
             html.H2("Market Concentration Analysis", style={'color': '#004085', 'border-bottom': '2px solid #b8daff', 'padding-bottom': '10px'}),
             html.P("Analyze tomato trade volume or trader concentration. Use the controls to switch data types and visualization styles.", style={'marginBottom': '20px'}),
@@ -120,25 +110,22 @@ else:
             html.Div(style={'position': 'relative', 'width': '100%'}, children=[
                 html.Div(id={'type': 'floating-panel-wrapper', 'index': 'combined'}, className='floating-controls', children=[
                     html.Div(id={'type': 'panel-header', 'index': 'combined'}, className='control-panel-header', n_clicks=0, children=[
-                        html.Span("⚙️", className='header-icon'),
-                        html.Span("Analysis Controls", className='header-text'),
-                        html.Button('−', className='toggle-btn')
+                        html.Span("⚙️", className='header-icon'), html.Span("Analysis Controls", className='header-text'), html.Button('−', className='toggle-btn')
                     ]),
                     html.Div(id={'type': 'panel-content', 'index': 'combined'}, className='controls-content', children=[
-                        # Controls Content Here
-                        html.Label("📊 Analysis Type", style={'fontWeight': 'bold', 'fontSize': '13px'}),
+                        html.Label("📊 Analysis Type", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginBottom': '5px'}),
                         dcc.RadioItems(id='data-type-toggle', options=[{'label': ' Tomato Volume', 'value': 'tomatoes'}, {'label': ' Traders', 'value': 'traders'}], value='tomatoes', labelStyle={'display': 'block'}),
-                        html.Label("🎨 View Style", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px'}),
+                        html.Label("🎨 View Style", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px', 'marginBottom': '5px'}),
                         dcc.RadioItems(id='view-type-toggle', options=[{'label': ' Points', 'value': 'points'}, {'label': ' Heatmap', 'value': 'heatmap'}], value='points', labelStyle={'display': 'block'}),
                         html.Div(id='season-control-div', children=[
-                            html.Label("🌱 Season", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px'}),
+                            html.Label("🌱 Season", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px', 'marginBottom': '5px'}),
                             dcc.RadioItems(id='combined-season-toggle', options=[{'label': ' High', 'value': 'High Season'}, {'label': ' Low', 'value': 'Low Season'}], value='High Season', labelStyle={'display': 'inline-block', 'marginRight':'15px'}),
                         ]),
                         html.Div(id='trader-control-div', children=[
-                            html.Label("👤 Trader Type", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px'}),
+                            html.Label("👤 Trader Type", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px', 'marginBottom': '5px'}),
                             dcc.Dropdown(id='combined-trader-type-dropdown', options=[{'label': 'All Traders', 'value': 'All'}] + [{'label': t, 'value': t} for t in sorted(trader_df['trader_id'].unique()) if pd.notna(t)], value='All'),
                         ]),
-                        html.Label("📅 Time Period", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px'}),
+                        html.Label("📅 Time Period", style={'fontWeight': 'bold', 'fontSize': '13px', 'marginTop': '20px', 'marginBottom': '5px'}),
                         dcc.Slider(id='combined-time-slider', min=0, max=2, marks={0: '10 Yrs Ago', 1: '5 Yrs Ago', 2: 'Now'}, value=2, step=None, included=False),
                     ]),
                 ]),
@@ -146,7 +133,7 @@ else:
             ]),
         ]),
         
-        # --- FOOTER (FROM YOUR OLD APP) ---
+        # --- FOOTER (FROM YOUR RENDER APP) ---
         html.Footer([
             html.P("The INCATA project is funded by the Gates Foundation.",
                    style={'color': '#6c757d', 'fontSize': '0.9em'})
@@ -156,7 +143,6 @@ else:
 
     # --- 3. DASH CALLBACKS ---
 
-    # Callback for floating control panels
     @app.callback(
         [Output({'type': 'floating-panel-wrapper', 'index': MATCH}, 'className'),
          Output({'type': 'panel-content', 'index': MATCH}, 'className')],
@@ -169,11 +155,11 @@ else:
             return ('floating-controls icon-only', 'controls-content hidden') if 'icon-only' not in current_class else ('floating-controls', 'controls-content')
         return no_update, no_update
 
-    # Callback for the Network Map
+    # ----- NETWORK MAP CALLBACK (CORRECT, DETAILED VERSION) -----
     @app.callback(
         Output('network-map', 'figure'),
         [Input('master-market-type-filter', 'value'), Input('season-toggle', 'value'),
-         Input('network-time-slider', 'value'), Input('toggle-routes', 'value'), 
+         Input('network-time-slider', 'value'), Input('toggle-routes', 'value'),
          Input('layer-toggles', 'value')],
         [State('network-map', 'relayoutData')]
     )
@@ -186,7 +172,8 @@ else:
         if selected_market_type != 'All Markets':
             df_flow = df_flow[df_flow['mkt_type'] == selected_market_type]
         df_map = df_flow[df_flow['share'] > 0].copy()
-        
+        df_vol = market_volume_df[(market_volume_df['season'] == selected_season) & (market_volume_df['Time Period'] == selected_time)]
+
         map_style = map_style_dark if 'show_nightlights' in layer_toggles else map_style_light
         mapbox_layers = []
 
@@ -203,31 +190,42 @@ else:
             center = relayout_data['mapbox.center']
 
         fig = go.Figure()
-        
-        if 'show_markers' in layer_toggles:
+
+        if 'show_markers' in layer_toggles and not df_map.empty:
             routes_visible = 'show' in toggle_value
-            if not df_map.empty:
-                # Add Lines
-                lats, lons = [item for _, row in df_map.iterrows() for item in (row['origin_lat'], row['market_lat'], None)], [item for _, row in df_map.iterrows() for item in (row['origin_lon'], row['market_lon'], None)]
-                fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines', line=dict(width=1, color='grey'), hoverinfo='none', visible=routes_visible, showlegend=False))
-                
-                # Add Origins
-                origins = df_map[['origin_name', 'origin_lat', 'origin_lon']].drop_duplicates()
-                fig.add_trace(go.Scattermapbox(lat=origins['origin_lat'], lon=origins['origin_lon'], mode='markers', marker=dict(size=10, color='#a50f15'), name='Produce Origin', text=origins['origin_name'], hoverinfo='text'))
-                
-                # Add Markets
-                markets = df_map[['mkt_name', 'market_lat', 'market_lon']].drop_duplicates()
-                fig.add_trace(go.Scattermapbox(lat=markets['market_lat'], lon=markets['market_lon'], mode='markers', marker=dict(size=12, color='blue'), name='Market', text=markets['mkt_name'], hoverinfo='text'))
+            share_bins = [
+                {'name': 'High Share (>75%)', 'data': df_map[df_map['share'] >= 75], 'width': 4, 'color': 'rgba(217, 95, 2, 0.7)'},
+                {'name': 'Medium Share (25-75%)', 'data': df_map[(df_map['share'] < 75) & (df_map['share'] >= 25)], 'width': 2, 'color': 'rgba(117, 112, 179, 0.7)'},
+                {'name': 'Low Share (<25%)', 'data': df_map[df_map['share'] < 25], 'width': 1, 'color': 'rgba(102, 166, 30, 0.7)'}
+            ]
+            for s_bin in share_bins:
+                if not s_bin['data'].empty:
+                    lats = [item for _, row in s_bin['data'].iterrows() for item in (row['origin_lat'], row['market_lat'], None)]
+                    lons = [item for _, row in s_bin['data'].iterrows() for item in (row['origin_lon'], row['market_lon'], None)]
+                    fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode='lines', line=dict(width=s_bin['width'], color=s_bin['color']), name=s_bin['name'], hoverinfo='none', visible=routes_visible))
+            
+            origins = df_map[['origin_name', 'origin_lat', 'origin_lon']].drop_duplicates().merge(df_map.groupby('origin_name', observed=True)['mkt_name'].nunique().reset_index(name='market_count'), on='origin_name')
+            origins['hover_text'] = origins['origin_name'] + '<br>Supplies ' + origins['market_count'].astype(str) + ' market(s)'
+            fig.add_trace(go.Scattermapbox(lat=origins['origin_lat'], lon=origins['origin_lon'], mode='markers', marker=dict(size=(5 + origins['market_count']), color='#a50f15', opacity=0.9), name='Produce Origin', text=origins['hover_text'], hoverinfo='text'))
+            
+            markets = df_map[['mkt_id', 'mkt_name', 'market_lat', 'market_lon', 'mkt_type']].drop_duplicates().merge(df_vol[['mkt_id', 'Total Volume']], on='mkt_id', how='left').fillna(0)
+            market_hover_info = df_map.assign(origin_share_str=df_map['origin_name'].astype(str) + ': ' + df_map['share'].astype(int).astype(str) + '%').groupby('mkt_name', observed=True)['origin_share_str'].apply('<br>'.join).reset_index(name='details')
+            markets = markets.merge(market_hover_info, on='mkt_name', how='left')
+            markets['hover_text'] = '<b>' + markets['mkt_name'] + '</b><br><i>' + markets['mkt_type'] + '</i><br>' + 'Trade Volume: ' + markets['Total Volume'].round(0).astype(int).apply(lambda x: f'{x:,}') + ' units<br>' + '--- Origins ---<br>' + markets['details'].fillna('')
+            markets['size'] = 4 + (markets['Total Volume'] ** 0.5) * 0.08
+            fig.add_trace(go.Scattermapbox(lat=markets['market_lat'], lon=markets['market_lon'], mode='markers', marker=dict(size=markets['size'], color='blue', opacity=0.9), name='Market', text=markets['hover_text'], hoverinfo='text'))
+        
+        elif 'show_markers' in layer_toggles:
+             fig.add_annotation(text="No trade flow data for this selection.", showarrow=False, font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"))
 
         fig.update_layout(
-            mapbox_style=map_style, mapbox_layers=mapbox_layers,
-            mapbox_zoom=zoom, mapbox_center=center,
+            mapbox_style=map_style, mapbox_layers=mapbox_layers, mapbox_zoom=zoom, mapbox_center=center,
             margin={"r":0, "t":0, "l":0, "b":0}, showlegend=True,
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor='rgba(255,255,255,0.85)', bordercolor='rgba(0,0,0,0.1)', borderwidth=1, traceorder='normal', itemsizing='constant', font=dict(size=11))
         )
         return fig
 
-    # Callback to show/hide controls for the combined map
+    # ----- COMBINED MAP CALLBACKS -----
     @app.callback(
         [Output('trader-control-div', 'style'), Output('season-control-div', 'style')],
         Input('data-type-toggle', 'value')
@@ -235,10 +233,9 @@ else:
     def update_combined_map_controls(data_type):
         if data_type == 'traders':
             return {'display': 'block'}, {'display': 'none'}
-        else: # tomatoes
+        else:
             return {'display': 'none'}, {'display': 'block'}
 
-    # Callback for the Combined "Market Concentration" Map
     @app.callback(
         [Output('combined-map', 'figure'), Output('combined-map-title', 'children')],
         [Input('master-market-type-filter', 'value'), Input('data-type-toggle', 'value'),
@@ -250,7 +247,6 @@ else:
         time_map = {0: '10 Yrs Ago', 1: '5 Yrs Ago', 2: 'Now'}
         selected_time = time_map[time_value]
         
-        fig = go.Figure()
         df, title_parts, z_value_col, colorscale, colorbar_title, heatmap_radius = (None,)*6
 
         if data_type == 'tomatoes':
@@ -267,12 +263,12 @@ else:
             title_parts, z_value_col, colorscale, colorbar_title, heatmap_radius = [f'{selected_trader} Traders', selected_time], selected_time, 'Plasma', 'No. of Traders', 30
         
         map_title = ' - '.join(title_parts)
+        fig = go.Figure()
 
         if df.empty:
             fig.add_annotation(text="No data available for this selection.", showarrow=False)
         else:
             df['hover_text'] = '<b>' + df['mkt_name'] + '</b><br>' + colorbar_title + ': ' + df[z_value_col].round(0).astype(int).apply(lambda x: f'{x:,}')
-            
             if view_type == 'points':
                 df['size'] = 5 + (df[z_value_col] ** 0.5) * (0.1 if data_type == 'tomatoes' else 0.8)
                 fig.add_trace(go.Scattermapbox(lat=df['lat'], lon=df['lon'], mode='markers', marker=dict(size=df['size'], color=df[z_value_col], colorscale=colorscale, cmin=0, cmax=df[z_value_col].quantile(0.95), showscale=True, colorbar_title_text=colorbar_title), text=df['hover_text'], hoverinfo='text'))
@@ -285,14 +281,10 @@ else:
             zoom = relayout_data['mapbox.zoom']
             center = relayout_data['mapbox.center']
 
-        fig.update_layout(
-            margin={"r":0, "t":0, "l":0, "b":0},
-            mapbox_style=map_style_light, mapbox_zoom=zoom, mapbox_center=center
-        )
+        fig.update_layout(margin={"r":0, "t":0, "l":0, "b":0}, mapbox_style=map_style_light, mapbox_zoom=zoom, mapbox_center=center)
         return fig, map_title
 
 # --- 4. RUN THE APP ---
 if __name__ == '__main__':
-    # When running locally, use debug=True for hot-reloading
-    # For production on Render, Gunicorn will run the app, and debug should be False
     app.run(debug=False)
+
