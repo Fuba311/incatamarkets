@@ -1,50 +1,22 @@
-/* assets/style.css */
-
-/* General Animation Keyframes */
-@keyframes slideDown {
-    from {
-        max-height: 0;
-        opacity: 0;
-        transform: translateY(-10px);
-    }
-    to {
-        max-height: 600px; /* Increased max-height for taller panels */
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes slideUp {
-    from {
-        max-height: 600px;
-        opacity: 1;
-    }
-    to {
-        max-height: 0;
-        opacity: 0;
-    }
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to { opacity: 1; transform: scale(1); }
-}
-
-/* Base style for all floating control panels */
+/* --- Base Styles and Aesthetics --- */
 .floating-controls {
     position: absolute;
-    top: 10px;
     left: 10px;
     z-index: 1000;
     background-color: rgba(255, 255, 255, 0.97);
     border: 1px solid #ccc;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    width: 330px; /* Increased width to prevent text overlap */
-    transition: all 0.3s ease;
-    animation: fadeIn 0.4s ease-out;
+    width: 330px;
+    /* CRITICAL: This MUST be visible to prevent dropdowns from being cut off. */
+    overflow: visible; 
 }
 
+/* Positioning for the top and bottom panels */
+#network-floating-controls { top: 10px; }
+#combined-floating-controls { top: auto; bottom: 40px; }
+
+/* Header styles from your design */
 .control-panel-header {
     display: flex;
     justify-content: space-between;
@@ -80,13 +52,40 @@
     transform: scale(1.2);
 }
 
+
+/* --- Content Panel and Animation (The Core Fix) --- */
 .controls-content {
     padding: 15px;
-    display: block;
-    animation: slideDown 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    overflow: hidden;
+    /* CRITICAL: Must be visible for dropdowns */
+    overflow: visible; 
+    
+    /* Animation settings that don't use max-height */
+    transform-origin: top;
+    transition: transform 0.3s ease, opacity 0.3s ease, visibility 0.3s, height 0.3s ease, padding 0.3s ease;
+    
+    /* Initial VISIBLE state */
+    opacity: 1;
+    transform: scaleY(1);
+    visibility: visible;
+    height: auto; /* Let content determine height */
 }
 
+.controls-content.hidden {
+    /* HIDDEN state for animation */
+    opacity: 0;
+    transform: scaleY(0);
+    
+    /* This makes the panel itself collapse */
+    height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin: 0;
+    
+    /* Hide from screen readers and clicks after transition */
+    visibility: hidden;
+}
+
+/* --- Other Styles --- */
 #network-info-button:hover {
     background-color: #cce5ff !important;
     transform: translateY(-1px);
@@ -94,9 +93,8 @@
     transition: all 0.2s ease;
 }
 
-/* Specific style for conditional controls to smoothly appear/disappear */
 .conditional-control {
-    transition: all 0.3s ease-in-out;
+    transition: opacity 0.3s ease, max-height 0.3s ease;
     opacity: 1;
     max-height: 100px;
     overflow: hidden;
@@ -105,6 +103,18 @@
 .conditional-control.hidden {
     opacity: 0;
     max-height: 0;
-    margin-bottom: 0 !important; /* Remove margin when hidden */
+    margin-bottom: 0 !important;
     padding: 0;
+}
+
+/* This helps ensure dropdowns appear on top of other content */
+.Select-menu-outer {
+    z-index: 1001 !important;
+}
+
+
+/* FIX: Robust selector to hide map attribution */
+.plotly-graph-div .mapboxgl-ctrl-bottom-right,
+.plotly-graph-div .mapboxgl-ctrl-bottom-left {
+    display: none !important;
 }
