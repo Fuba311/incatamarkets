@@ -1,22 +1,34 @@
-/* --- Base Styles and Aesthetics --- */
+/* --- Floating Control Panel --- */
 .floating-controls {
     position: absolute;
     left: 10px;
+    top: 10px;
     z-index: 1000;
     background-color: rgba(255, 255, 255, 0.97);
     border: 1px solid #ccc;
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
     width: 330px;
-    /* CRITICAL: This MUST be visible to prevent dropdowns from being cut off. */
+    height: auto;
+    /* FIX: Set to 'visible' by default so dropdowns can escape. */
     overflow: visible; 
+    transition: width 0.4s ease, height 0.4s ease, border-radius 0.4s ease, background-color 0.4s ease;
 }
 
-/* Positioning for the top and bottom panels */
-#network-floating-controls { top: 10px; }
-#combined-floating-controls { top: auto; bottom: 40px; }
+/* --- State 2: Icon Only (Collapsed) --- */
+.floating-controls.icon-only {
+    width: 48px;
+    height: 48px;
+    background-color: #004085;
+    border-radius: 10px;
+    cursor: pointer;
+    /* FIX: Apply 'hidden' ONLY when collapsed to clip the inner content during animation. */
+    overflow: hidden; 
+}
 
-/* Header styles from your design */
+/* --- Control Panel Header --- */
+/* --- In your style.css file, find this rule --- */
+
 .control-panel-header {
     display: flex;
     justify-content: space-between;
@@ -24,97 +36,79 @@
     padding: 10px 15px;
     background: linear-gradient(135deg, #004085 0%, #0056b3 100%);
     color: white;
-    border-radius: 8px 8px 0 0;
+    /* FIX: This line is now redundant and can be removed.
+       The parent .floating-controls will handle the rounding. */
+    /* border-radius: 8px 8px 0 0; */ 
     cursor: pointer;
     transition: background 0.3s ease;
     user-select: none;
 }
-
-.control-panel-header:hover {
-    background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
+.floating-controls.icon-only .control-panel-header {
+    background: transparent;
+    padding: 0;
+    height: 100%;
+    justify-content: center;
 }
 
-.control-panel-header .toggle-btn {
+/* Header Icon (The Cog) */
+.header-icon {
+    font-size: 24px;
+    transition: transform 0.3s ease;
+}
+.icon-only .control-panel-header:hover .header-icon {
+    transform: scale(1.15) rotate(45deg);
+}
+
+/* Header Text ("Map Controls") */
+.header-text {
+    font-weight: bold;
+    font-size: 14px;
+    transition: opacity 0.2s ease;
+}
+.floating-controls.icon-only .header-text {
+    display: none;
+}
+
+/* Toggle Button ("-") */
+.toggle-btn {
     background: transparent;
     border: none;
     color: white;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: bold;
     cursor: pointer;
-    padding: 0;
-    width: 25px;
-    height: 25px;
-    transition: transform 0.2s ease;
     line-height: 1;
+    padding: 0 5px;
+}
+.floating-controls.icon-only .toggle-btn {
+    display: none;
 }
 
-.control-panel-header .toggle-btn:hover {
-    transform: scale(1.2);
-}
 
-
-/* --- Content Panel and Animation (The Core Fix) --- */
+/* --- Panel Content Area --- */
 .controls-content {
-    padding: 15px;
-    /* CRITICAL: Must be visible for dropdowns */
-    overflow: visible; 
-    
-    /* Animation settings that don't use max-height */
-    transform-origin: top;
-    transition: transform 0.3s ease, opacity 0.3s ease, visibility 0.3s, height 0.3s ease, padding 0.3s ease;
-    
-    /* Initial VISIBLE state */
+    padding: 20px 15px;
+    overflow: visible;
+    transition: opacity 0.3s ease 0.1s;
     opacity: 1;
-    transform: scaleY(1);
-    visibility: visible;
-    height: auto; /* Let content determine height */
 }
-
 .controls-content.hidden {
-    /* HIDDEN state for animation */
     opacity: 0;
-    transform: scaleY(0);
-    
-    /* This makes the panel itself collapse */
     height: 0;
-    padding-top: 0;
-    padding-bottom: 0;
-    margin: 0;
-    
-    /* Hide from screen readers and clicks after transition */
-    visibility: hidden;
+    padding: 0 15px;
+    transition: opacity 0.1s ease, height 0s ease 0.1s;
 }
 
-/* --- Other Styles --- */
-#network-info-button:hover {
-    background-color: #cce5ff !important;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    transition: all 0.2s ease;
-}
 
-.conditional-control {
-    transition: opacity 0.3s ease, max-height 0.3s ease;
-    opacity: 1;
-    max-height: 100px;
-    overflow: hidden;
-}
-
-.conditional-control.hidden {
-    opacity: 0;
-    max-height: 0;
-    margin-bottom: 0 !important;
-    padding: 0;
-}
-
-/* This helps ensure dropdowns appear on top of other content */
+/* --- Dropdown Menu Fix --- */
 .Select-menu-outer {
-    z-index: 1001 !important;
+    z-index: 9999 !important;
 }
 
 
-/* FIX: Robust selector to hide map attribution */
-.plotly-graph-div .mapboxgl-ctrl-bottom-right,
-.plotly-graph-div .mapboxgl-ctrl-bottom-left {
+/* --- HIDE MAP ATTRIBUTION (Mapbox & MapLibre) --- */
+.mapboxgl-ctrl-bottom-left, .mapboxgl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right {
     display: none !important;
+    visibility: hidden !important;
 }
