@@ -1,1 +1,110 @@
+/* assets/style.css */
 
+/* General Animation Keyframes */
+@keyframes slideDown {
+    from {
+        max-height: 0;
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        max-height: 600px; /* Increased max-height for taller panels */
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideUp {
+    from {
+        max-height: 600px;
+        opacity: 1;
+    }
+    to {
+        max-height: 0;
+        opacity: 0;
+    }
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+/* Base style for all floating control panels */
+.floating-controls {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1000;
+    background-color: rgba(255, 255, 255, 0.97);
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    width: 330px; /* Increased width to prevent text overlap */
+    transition: all 0.3s ease;
+    animation: fadeIn 0.4s ease-out;
+}
+
+.control-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: linear-gradient(135deg, #004085 0%, #0056b3 100%);
+    color: white;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer;
+    transition: background 0.3s ease;
+    user-select: none;
+}
+
+.control-panel-header:hover {
+    background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
+}
+
+.control-panel-header .toggle-btn {
+    background: transparent;
+    border: none;
+    color: white;
+    font-size: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 0;
+    width: 25px;
+    height: 25px;
+    transition: transform 0.2s ease;
+    line-height: 1;
+}
+
+.control-panel-header .toggle-btn:hover {
+    transform: scale(1.2);
+}
+
+.controls-content {
+    padding: 15px;
+    display: block;
+    animation: slideDown 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    overflow: hidden;
+}
+
+#network-info-button:hover {
+    background-color: #cce5ff !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    transition: all 0.2s ease;
+}
+
+/* Specific style for conditional controls to smoothly appear/disappear */
+.conditional-control {
+    transition: all 0.3s ease-in-out;
+    opacity: 1;
+    max-height: 100px;
+    overflow: hidden;
+}
+
+.conditional-control.hidden {
+    opacity: 0;
+    max-height: 0;
+    margin-bottom: 0 !important; /* Remove margin when hidden */
+    padding: 0;
+}
