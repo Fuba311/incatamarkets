@@ -14,7 +14,7 @@ import os
 # --- 1. APP INITIALIZATION ---
 app = dash.Dash(__name__, assets_folder='assets')
 server = app.server  # CRITICAL: Expose server for Gunicorn/Render
-app.title = "INCATA Market Analysis"
+app.title = "INCATA Market Analysis Dashboard"
 
 # --- 2. DATA LOADING (OPTIMIZED) ---
 print("--- Loading Pre-Processed Data ---")
@@ -83,9 +83,12 @@ if data_load_success:
         
         html.Div(id='menu-portal-target'),
         html.Div([
-            html.H1("Tegemeo Market Analysis Dashboard", style={'textAlign': 'center', 'color': '#004085'}),
+            html.H1("INCATA Market Analysis Dashboard", style={'textAlign': 'center', 'color': '#004085'}),
             html.H4("A Public Dashboard for Markets Studied under Project INCATA", style={'textAlign': 'center', 'fontWeight': 'normal'}),
-            html.P("Linked Farms and Enterprises for Inclusive Agricultural Transformation in Africa and Asia", style={'textAlign': 'center', 'fontStyle': 'italic', 'color': '#6c757d', 'marginTop': '-10px'})
+            html.P("In Collaboration with RIMISP, Michigan State University, IFPRI, and Tegemeo Institute", 
+                   style={'textAlign': 'center', 'fontSize': '14px', 'color': '#495057', 'marginTop': '-5px', 'marginBottom': '5px'}),
+            html.P("INCATA: Linked Farms and Enterprises for Inclusive Agricultural Transformation in Africa and Asia", 
+                   style={'textAlign': 'center', 'fontStyle': 'italic', 'color': '#6c757d', 'fontSize': '13px'})
         ], style={'marginBottom': '40px'}),
         html.Div(style={'background-color': '#e2e3e5', 'padding': '15px', 'border-radius': '10px', 'margin-bottom': '60px'}, children=[
             html.Label("Global Filter: Select Market Type", style={'fontWeight': 'bold', 'display': 'block', 'color': '#495057', 'marginBottom': '10px'}),
@@ -95,7 +98,7 @@ if data_load_success:
         # NETWORK MAP SECTION
         html.Div(style=section_style, children=[
             html.H2("Produce Flow Network", style={'color': '#004085', 'border-bottom': '2px solid #b8daff', 'padding-bottom': '10px'}),
-            html.P("This map shows the origin and flow of tomatoes. Use the controls panel to adjust visualization settings.", style={'marginBottom': '20px'}),
+            html.P("This map shows the origin and flow of tomatoes. Use the controls panel to adjust visualization settings. The map position of the Origins of Produce (Red dots) is an approximation only, as in many cases they refer to somewhere within that county.", style={'marginBottom': '20px'}),
             html.Div(style={'position': 'relative', 'width': '100%'}, children=[
                 html.Div(id={'type': 'floating-panel-wrapper', 'index': 'network'}, className='floating-controls', children=[
                     html.Div(id={'type': 'panel-header', 'index': 'network'}, className='control-panel-header', n_clicks=0, children=[
@@ -185,7 +188,7 @@ if data_load_success:
 else:
     # Error layout if data fails to load
     app.layout = html.Div([
-        html.H1("Application Error", style={'textAlign': 'center', 'color': '#dc3545', 'marginTop': '50px'}),
+        html.H1("INCATA Dashboard - Application Error", style={'textAlign': 'center', 'color': '#dc3545', 'marginTop': '50px'}),
         html.P("Could not load necessary data files.", style={'textAlign': 'center', 'fontSize': '18px'}),
         html.P("Please ensure the 'processed_data' folder is uploaded to Render with all required files:", 
                style={'textAlign': 'center'}),
@@ -406,6 +409,5 @@ if data_load_success:
 # --- 6. RUN THE APP ---
 # For production on Render, we don't use app.run()
 # Instead, Gunicorn will use the 'server' object
-# --- 4. RUN THE APP ---
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
