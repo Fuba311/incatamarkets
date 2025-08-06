@@ -1,11 +1,9 @@
 dash
 pandas
-numpy
-geopandas
-rasterio
-Pillow
-shapely
-plotly
 gunicorn
-Flask-Caching
-redis
+geopandas
+plotly
+pyarrow
+pillow
+rasterio
+shapely
