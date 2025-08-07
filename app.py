@@ -45,7 +45,7 @@ app.index_string = """
 
       /* Floating control panel */
       .floating-controls{
-        position:absolute; top:64px; left:10px; width:280px; background:var(--panel-bg);
+        position:absolute; top:16px; left:8px; width:280px; background:var(--panel-bg);
         border:1px solid #e9ecef; border-radius:10px; box-shadow:var(--shadow);
         overflow:visible !important;              /* KEY: allow menus to escape */
         z-index:1000; transition:width .2s ease;
@@ -199,10 +199,12 @@ def _safe_bool_contains(container, value):
 # ------------------------------------------------------------------------------
 # 4) LAYOUT
 # ------------------------------------------------------------------------------
+# --- 4) APP LAYOUT (non-blocking loaders + lifted dropdowns) ---
 if data_load_success:
     app.layout = html.Div(
         style={"padding": "2% 5%"},
         children=[
+            # HERO
             html.Div(
                 className="app-hero",
                 children=[
@@ -217,7 +219,7 @@ if data_load_success:
                 style={"marginBottom": "28px"},
             ),
 
-            # Global filter
+            # GLOBAL FILTER
             html.Div(
                 style={
                     "background-color": "#e2e3e5",
@@ -230,19 +232,19 @@ if data_load_success:
                         "Global Filter: Select Market Type",
                         style={"fontWeight": "bold", "display": "block", "color": "#495057", "marginBottom": "8px"},
                     ),
-                    # Global filter
                     dcc.Dropdown(
-                        id='master-market-type-filter',
-                        className='lifted-dropdown',
-                        options=[{'label': 'All Markets', 'value': 'All Markets'}] + [
-                            {'label': m, 'value': m} for m in sorted(network_df['mkt_type'].dropna().unique())
-                        ],
-                        value='All Markets'
+                        id="master-market-type-filter",
+                        className="lifted-dropdown",    # <- lets menu escape the panel
+                        options=[{"label": "All Markets", "value": "All Markets"}]
+                        + [{"label": m, "value": m} for m in sorted(network_df["mkt_type"].dropna().unique())],
+                        value="All Markets",
                     ),
                 ],
             ),
 
-            # --- NETWORK MAP SECTION ---
+            # =========================
+            # PRODUCE FLOW NETWORK MAP
+            # =========================
             html.Div(
                 className="section-card",
                 children=[
@@ -251,13 +253,15 @@ if data_load_success:
                         "Map shows tomato flows from origins to markets. Origins (red) are approximate locations (often county-level centroids).",
                         style={"marginBottom": "16px"},
                     ),
+
                     html.Div(
                         style={"position": "relative", "width": "100%"},
                         children=[
-                            # Floating panel
+                            # Floating control panel (moved up/left)
                             html.Div(
                                 id={"type": "floating-panel-wrapper", "index": "network"},
                                 className="floating-controls",
+                                style={"top": "16px", "left": "8px"},  # <— closer to the edge
                                 children=[
                                     html.Div(
                                         id={"type": "panel-header", "index": "network"},
@@ -330,13 +334,12 @@ if data_load_success:
                                                         children=[
                                                             html.Label("Opacity:", style={"fontSize": "12px", "minWidth": "50px"}),
                                                             dcc.Dropdown(
-                                                                id='opacity-dropdown',
-                                                                className='lifted-dropdown',
-                                                                options=[{'label': f'{i}%', 'value': i} for i in range(0, 101, 10)],
+                                                                id="opacity-dropdown",
+                                                                className="lifted-dropdown",   # <- no clipping
+                                                                options=[{"label": f"{i}%", "value": i} for i in range(0, 101, 10)],
                                                                 value=70, clearable=False, searchable=False,
-                                                                style={'width': '80px', 'fontSize': '11px'}
+                                                                style={"width": "80px", "fontSize": "11px"},
                                                             ),
-
                                                         ],
                                                     ),
                                                 ],
@@ -356,15 +359,28 @@ if data_load_success:
                                     ),
                                 ],
                             ),
+
+                            # Title bubble
                             html.Div(id="network-map-title"),
-                            dcc.Loading(
-                                type="dot",
-                                children=dcc.Graph(
-                                    id="network-map",
-                                    style={"height": "85vh", "width": "100%"},
-                                    config=GRAPH_CONFIG,
+
+                            # Tiny non-blocking spinner in the corner (sentinel)
+                            html.Div(
+                                style={"position": "absolute", "top": "8px", "right": "10px", "zIndex": 1200},
+                                children=dcc.Loading(
+                                    id="network-loading",
+                                    type="dot",
+                                    children=html.Div(id="network-loading-sentinel", style={"width": 1, "height": 1})
                                 ),
                             ),
+
+                            # The map (no Loading wrapper => stays visible during updates)
+                            dcc.Graph(
+                                id="network-map",
+                                style={"height": "85vh", "width": "100%"},
+                                config=GRAPH_CONFIG,
+                            ),
+
+                            # Info popup
                             html.Div(
                                 id="network-info-collapse",
                                 style={
@@ -388,13 +404,16 @@ if data_load_success:
                 ],
             ),
 
-            # --- MARKET CONCENTRATION SECTION ---
+            # ===============================
+            # MARKET CONCENTRATION / TRADERS
+            # ===============================
             html.Div(
                 className="section-card",
                 children=[
                     html.H2("Market Concentration Analysis", style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"}),
                     html.P("Analyze tomato trade volume or trader concentration. Switch type and view to explore patterns."),
                     html.H3(id="combined-map-title", style=title_style),
+
                     html.Div(
                         style={"position": "relative", "width": "100%"},
                         children=[
@@ -463,12 +482,12 @@ if data_load_success:
                                                 children=[
                                                     html.Label("👤 Trader Type", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
                                                     dcc.Dropdown(
-                                                        id='combined-trader-type-dropdown',
-                                                        className='lifted-dropdown',
-                                                        options=[{'label': 'All Traders', 'value': 'All'}] + [
-                                                            {'label': t, 'value': t} for t in sorted(trader_df['trader_id'].dropna().unique())
-                                                        ],
-                                                        value='All', placeholder="Select..."
+                                                        id="combined-trader-type-dropdown",
+                                                        className="lifted-dropdown",   # <- avoid clipping
+                                                        options=[{"label": "All Traders", "value": "All"}]
+                                                        + [{"label": t, "value": t} for t in sorted(trader_df["trader_id"].dropna().unique())],
+                                                        value="All",
+                                                        placeholder="Select...",
                                                     ),
                                                 ],
                                             ),
@@ -487,15 +506,25 @@ if data_load_success:
                                     ),
                                 ],
                             ),
-                            dcc.Loading(
-                                type="dot",
-                                children=dcc.Graph(id="combined-map", style={"height": "85vh"}, config=GRAPH_CONFIG),
+
+                            # Tiny non-blocking spinner in corner (sentinel)
+                            html.Div(
+                                style={"position": "absolute", "top": "8px", "right": "10px", "zIndex": 1200},
+                                children=dcc.Loading(
+                                    id="combined-loading",
+                                    type="dot",
+                                    children=html.Div(id="combined-loading-sentinel", style={"width": 1, "height": 1})
+                                ),
                             ),
+
+                            # Map (no full-overlay loader)
+                            dcc.Graph(id="combined-map", style={"height": "85vh"}, config=GRAPH_CONFIG),
                         ],
                     ),
                 ],
             ),
 
+            # FOOTER
             html.Footer(
                 [
                     html.P(
@@ -507,27 +536,6 @@ if data_load_success:
                 style={"textAlign": "center", "padding": "18px 0", "marginTop": "24px", "borderTop": "1px solid #dee2e6"},
             ),
         ],
-    )
-else:
-    # Error layout if data fails to load
-    app.layout = html.Div(
-        [
-            html.H1("INCATA Dashboard - Application Error", style={"textAlign": "center", "color": "#dc3545", "marginTop": "50px"}),
-            html.P("Could not load necessary data files.", style={"textAlign": "center", "fontSize": "18px"}),
-            html.P("Please ensure the 'processed_data' folder is deployed with the following files:", style={"textAlign": "center"}),
-            html.Ul(
-                [
-                    html.Li("network_df.parquet"),
-                    html.Li("market_volume_df.parquet"),
-                    html.Li("trader_df.parquet"),
-                    html.Li("roads_*_processed.geojson"),
-                    html.Li("nightlights_data.json"),
-                ],
-                style={"maxWidth": "440px", "margin": "0 auto"},
-            ),
-            html.P("Check application logs for details.", style={"textAlign": "center", "marginTop": "16px"}),
-        ],
-        style={"padding": "2% 5%"},
     )
 
 # ------------------------------------------------------------------------------
@@ -570,16 +578,16 @@ if data_load_success:
         return base
 
     @app.callback(
-        [Output("network-map", "figure"), Output("network-map-title", "children")],
-        [
-            Input("master-market-type-filter", "value"),
-            Input("season-toggle", "value"),
-            Input("network-time-slider", "value"),
-            Input("opacity-dropdown", "value"),
-            Input("toggle-routes", "value"),
-            Input("layer-toggles", "value"),
-        ],
-        [State("network-map", "relayoutData")],
+        [Output('network-map', 'figure'),
+         Output('network-map-title', 'children'),
+         Output('network-loading-sentinel', 'children')],      
+        [Input('master-market-type-filter', 'value'),
+         Input('season-toggle', 'value'),
+         Input('network-time-slider', 'value'),
+         Input('opacity-dropdown', 'value'),
+         Input('toggle-routes', 'value'),
+         Input('layer-toggles', 'value')],
+        [State('network-map', 'relayoutData')]
     )
     def update_network_map(selected_market_type, selected_season, time_value, opacity_percent, toggle_value, layer_toggles, relayout_data):
         time_map = {0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}
@@ -732,7 +740,8 @@ if data_load_success:
             mapbox=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
         )
         map_title = f"{selected_season} - {selected_time}"
-        return fig, map_title
+        fig.update_layout(transition={'duration': 300})  # subtle transition; safe to keep
+        return fig, map_title, ""     
 
     @app.callback(
         [Output("trader-control-div", "className"), Output("season-control-div", "className")],
@@ -745,16 +754,16 @@ if data_load_success:
             return "conditional-control hidden", "conditional-control"
 
     @app.callback(
-        [Output("combined-map", "figure"), Output("combined-map-title", "children")],
-        [
-            Input("master-market-type-filter", "value"),
-            Input("data-type-toggle", "value"),
-            Input("view-type-toggle", "value"),
-            Input("combined-trader-type-dropdown", "value"),
-            Input("combined-season-toggle", "value"),
-            Input("combined-time-slider", "value"),
-        ],
-        [State("combined-map", "relayoutData")],
+        [Output('combined-map', 'figure'),
+         Output('combined-map-title', 'children'),
+         Output('combined-loading-sentinel', 'children')],     # ⬅️ new
+        [Input('master-market-type-filter', 'value'),
+         Input('data-type-toggle', 'value'),
+         Input('view-type-toggle', 'value'),
+         Input('combined-trader-type-dropdown', 'value'),
+         Input('combined-season-toggle', 'value'),
+         Input('combined-time-slider', 'value')],
+        [State('combined-map', 'relayoutData')]
     )
     def update_combined_map(market_type, data_type, view_type, selected_trader, selected_season, time_value, relayout_data):
         time_map = {0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}
@@ -842,7 +851,8 @@ if data_load_success:
             uirevision="keep",
             mapbox=dict(style=MAPBOX_STYLE_LIGHT, zoom=zoom, center=center),
         )
-        return fig, map_title
+        fig.update_layout(transition={'duration': 300})
+        return fig, map_title, ""
 
 # ------------------------------------------------------------------------------
 # 6) RUN (local) / SERVE (Render)
@@ -852,3 +862,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"  # set DASH_DEBUG=0 on Render if you run this directly
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
