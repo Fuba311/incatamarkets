@@ -134,6 +134,16 @@ app.index_string = """
       /* optional: make dots a little smaller */
       .title-spinner .dash-spinner{ transform: scale(.9); opacity:.9; }
 
+            /* Neutralize old absolute styles so both titles behave the same */
+      #network-map-title, #combined-map-title{
+        position: static !important;
+        top: auto !important;
+        left: auto !important;
+        transform: none !important;
+        display: inline-block !important;
+      }
+
+
     </style>
   </head>
   <body>
@@ -795,6 +805,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"  # set DASH_DEBUG=0 on Render if you run this directly
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
 
 
 
