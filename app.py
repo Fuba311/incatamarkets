@@ -101,6 +101,39 @@ app.index_string = """
       /* Hero */
       .app-hero h1{ text-align:center; color:var(--brand); margin-bottom:4px; }
       .app-hero h4{ text-align:center; font-weight:normal; margin-top:2px; }
+
+            :root{
+        --title-top: 14px;   /* ← tweak this to move both spinners/titles up/down */
+      }
+      
+      .title-wrap{
+        position: absolute;
+        top: var(--title-top);
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1200;
+        text-align: center;
+      }
+      
+      .title-chip{
+        background: rgba(255,255,255,.95);
+        padding: 8px 20px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #004085;
+        box-shadow: 0 2px 8px rgba(0,0,0,.12);
+        border: 1px solid rgba(0,64,133,.2);
+        display: inline-block;
+      }
+      
+      .title-spinner{
+        margin-top: 6px;     /* ← how far below the bubble the dots sit */
+      }
+      
+      /* optional: make dots a little smaller */
+      .title-spinner .dash-spinner{ transform: scale(.9); opacity:.9; }
+
     </style>
   </head>
   <body>
@@ -245,15 +278,12 @@ if data_load_success:
             # =========================
             # PRODUCE FLOW NETWORK MAP
             # =========================
-            # --- NETWORK MAP SECTION (drop-in) ---
+            # --- NETWORK MAP SECTION ---
             html.Div(
                 className="section-card",
                 children=[
                     html.H2("Produce Flow Network", style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"}),
-                    html.P(
-                        "Map shows tomato flows from origins to markets. Origins (red) are approximate locations (often county-level centroids).",
-                        style={"marginBottom": "16px"},
-                    ),
+                    html.P("Map shows tomato flows from origins to markets. Origins (red) are approximate locations (often county-level centroids).", style={"marginBottom": "16px"}),
                     html.Div(
                         style={"position": "relative", "width": "100%"},
                         children=[
@@ -280,10 +310,8 @@ if data_load_success:
                                                 style={"marginBottom": "16px"},
                                                 children=[
                                                     html.Label("📅 Time Period", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Slider(
-                                                        id="network-time-slider", min=0, max=2, step=None, included=False, value=2,
-                                                        marks={0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"},
-                                                    ),
+                                                    dcc.Slider(id="network-time-slider", min=0, max=2, step=None, included=False, value=2,
+                                                               marks={0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}),
                                                 ],
                                             ),
                                             html.Div(
@@ -318,22 +346,16 @@ if data_load_success:
                                                 style={"marginBottom": "12px"},
                                                 children=[
                                                     html.Label("🔗 Trade Routes", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Checklist(
-                                                        id="toggle-routes",
-                                                        options=[{"label": " Show Trade Routes", "value": "show"}],
-                                                        value=["show"],
-                                                        labelStyle={"fontSize": "12px", "marginBottom": "8px"},
-                                                    ),
+                                                    dcc.Checklist(id="toggle-routes", options=[{"label": " Show Trade Routes", "value": "show"}],
+                                                                  value=["show"], labelStyle={"fontSize": "12px", "marginBottom": "8px"}),
                                                     html.Div(
                                                         style={"display": "flex", "alignItems": "center", "gap": "10px", "marginTop": "10px"},
                                                         children=[
                                                             html.Label("Opacity:", style={"fontSize": "12px", "minWidth": "50px"}),
                                                             dcc.Dropdown(
-                                                                id="opacity-dropdown",
-                                                                className="lifted-dropdown",
+                                                                id="opacity-dropdown", className="lifted-dropdown",
                                                                 options=[{"label": f"{i}%", "value": i} for i in range(0, 101, 10)],
-                                                                value=70, clearable=False, searchable=False,
-                                                                style={"width": "80px", "fontSize": "11px"},
+                                                                value=70, clearable=False, searchable=False, style={"width": "80px", "fontSize": "11px"},
                                                             ),
                                                         ],
                                                     ),
@@ -341,53 +363,44 @@ if data_load_success:
                                             ),
                                             html.Div(
                                                 style={"borderTop": "1px solid #e0e0e0", "paddingTop": "10px", "marginTop": "10px"},
-                                                children=[
-                                                    html.Button(
-                                                        "ℹ How to Read This Map",
-                                                        id="network-info-button",
-                                                        n_clicks=0,
-                                                        style={"width": "100%", "cursor": "pointer", "border": "1px solid #004085", "backgroundColor": "#e7f3ff", "padding": "6px 10px", "borderRadius": "6px", "fontSize": "12px"},
-                                                    ),
-                                                ],
+                                                children=[html.Button("ℹ How to Read This Map", id="network-info-button", n_clicks=0,
+                                                                      style={"width": "100%", "cursor": "pointer", "border": "1px solid #004085",
+                                                                             "backgroundColor": "#e7f3ff", "padding": "6px 10px", "borderRadius": "6px", "fontSize": "12px"})],
                                             ),
                                         ],
                                     ),
                                 ],
                             ),
             
-                            # Title bubble (unchanged)
-                            html.Div(id="network-map-title"),
-            
-                            # ⬇️ Spinner positioned right below the title bubble
+                            # Centered title + tiny spinner
                             html.Div(
-                                id="network-loading-below-title",
-                                style={
-                                    "position": "absolute",
-                                    "top": "calc(10px + 38px)",   # title top (10px) + bubble height (~28–38px)
-                                    "left": "50%",
-                                    "transform": "translateX(-50%)",
-                                    "zIndex": 1200,
-                                },
-                                children=dcc.Loading(
-                                    id="network-loading",
-                                    type="dot",
-                                    children=html.Div(id="network-loading-sentinel", style={"width": 1, "height": 1}),
-                                ),
+                                className="title-wrap",
+                                children=[
+                                    html.Div(id="network-map-title", className="title-chip"),
+                                    html.Div(
+                                        className="title-spinner",
+                                        children=dcc.Loading(
+                                            id="network-loading",
+                                            type="dot",
+                                            children=html.Div(id="network-loading-sentinel", style={"width": 1, "height": 1}),
+                                        ),
+                                    ),
+                                ],
                             ),
             
-                            # Map (no dcc.Loading wrapper → no flash)
+                            # Map (no dcc.Loading wrapper)
                             dcc.Graph(id="network-map", style={"height": "85vh", "width": "100%"}, config=GRAPH_CONFIG),
             
                             # Info bubble
                             html.Div(
                                 id="network-info-collapse",
-                                style={
-                                    "display": "none", "position": "absolute", "bottom": "10px", "right": "10px",
-                                    "background-color": "rgba(248, 249, 250, 0.95)", "padding": "15px",
-                                    "border": "1px dashed #cce5ff", "borderRadius": "6px", "zIndex": "998", "maxWidth": "420px",
-                                },
+                                style={"display": "none", "position": "absolute", "bottom": "10px", "right": "10px",
+                                       "background-color": "rgba(248, 249, 250, 0.95)", "padding": "15px",
+                                       "border": "1px dashed #cce5ff", "borderRadius": "6px", "zIndex": "998", "maxWidth": "420px"},
                                 children=[
-                                    html.Button("✕", id="close-info-btn", n_clicks=0, style={"position": "absolute", "top": "6px", "right": "10px", "background": "transparent", "border": "none", "fontSize": "18px", "cursor": "pointer"}),
+                                    html.Button("✕", id="close-info-btn", n_clicks=0,
+                                                style={"position": "absolute", "top": "6px", "right": "10px",
+                                                       "background": "transparent", "border": "none", "fontSize": "18px", "cursor": "pointer"}),
                                     dcc.Markdown(
                                         "* **Red Dots (Produce Origins):** County/area where tomatoes are sourced.\n"
                                         "* **Blue Dots (Markets):** Markets where tomatoes are sold.\n"
@@ -401,21 +414,22 @@ if data_load_success:
                     ),
                 ],
             ),
-
+          
 
             # ===============================
             # MARKET CONCENTRATION / TRADERS
             # ===============================
+            # --- COMBINED ANALYSIS MAP SECTION ---
             html.Div(
                 className="section-card",
                 children=[
                     html.H2("Market Concentration Analysis", style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"}),
-                    html.P("Analyze tomato trade volume or trader concentration. Switch type and view to explore patterns."),
-                    html.H3(id="combined-map-title", style=title_style),
-
+                    html.P("Analyze tomato trade volume or trader concentration. Switch type and view to explore patterns.", style={"marginBottom": "20px"}),
+            
                     html.Div(
                         style={"position": "relative", "width": "100%"},
                         children=[
+                            # Floating controls for the combined map
                             html.Div(
                                 id={"type": "floating-panel-wrapper", "index": "combined"},
                                 className="floating-controls",
@@ -441,9 +455,7 @@ if data_load_success:
                                                     dcc.RadioItems(
                                                         id="data-type-toggle",
                                                         options=[{"label": " Tomatoes", "value": "tomatoes"}, {"label": " Traders", "value": "traders"}],
-                                                        value="tomatoes",
-                                                        inline=True,
-                                                        labelStyle={"marginRight": "14px"},
+                                                        value="tomatoes", inline=True, labelStyle={"marginRight": "14px"},
                                                     ),
                                                 ],
                                             ),
@@ -454,39 +466,31 @@ if data_load_success:
                                                     dcc.RadioItems(
                                                         id="view-type-toggle",
                                                         options=[{"label": " Points", "value": "points"}, {"label": " Heatmap", "value": "heatmap"}],
-                                                        value="points",
-                                                        inline=True,
-                                                        labelStyle={"marginRight": "14px"},
+                                                        value="points", inline=True, labelStyle={"marginRight": "14px"},
                                                     ),
                                                 ],
                                             ),
                                             html.Div(
-                                                id="season-control-div",
-                                                className="conditional-control",
-                                                style={"marginBottom": "18px"},
+                                                id="season-control-div", className="conditional-control", style={"marginBottom": "18px"},
                                                 children=[
                                                     html.Label("🌱 Season", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
                                                     dcc.RadioItems(
                                                         id="combined-season-toggle",
                                                         options=[{"label": " High", "value": "High Season"}, {"label": " Low", "value": "Low Season"}],
-                                                        value="High Season",
-                                                        inline=True,
+                                                        value="High Season", inline=True,
                                                     ),
                                                 ],
                                             ),
                                             html.Div(
-                                                id="trader-control-div",
-                                                className="conditional-control",
-                                                style={"marginBottom": "18px"},
+                                                id="trader-control-div", className="conditional-control", style={"marginBottom": "18px"},
                                                 children=[
                                                     html.Label("👤 Trader Type", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
                                                     dcc.Dropdown(
-                                                        id="combined-trader-type-dropdown",
-                                                        className="lifted-dropdown",   # <- avoid clipping
-                                                        options=[{"label": "All Traders", "value": "All"}]
-                                                        + [{"label": t, "value": t} for t in sorted(trader_df["trader_id"].dropna().unique())],
-                                                        value="All",
-                                                        placeholder="Select...",
+                                                        id="combined-trader-type-dropdown", className="lifted-dropdown",
+                                                        options=[{"label": "All Traders", "value": "All"}] + [
+                                                            {"label": t, "value": t} for t in sorted(trader_df["trader_id"].dropna().unique())
+                                                        ],
+                                                        value="All", placeholder="Select...",
                                                     ),
                                                 ],
                                             ),
@@ -494,34 +498,37 @@ if data_load_success:
                                                 style={"marginBottom": "6px"},
                                                 children=[
                                                     html.Label("📅 Time Period", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Slider(
-                                                        id="combined-time-slider",
-                                                        min=0, max=2, step=None, included=False, value=2,
-                                                        marks={0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"},
-                                                    ),
+                                                    dcc.Slider(id="combined-time-slider", min=0, max=2, step=None, included=False, value=2,
+                                                               marks={0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}),
                                                 ],
                                             ),
                                         ],
                                     ),
                                 ],
                             ),
-
-                            # Tiny non-blocking spinner in corner (sentinel)
+            
+                            # Centered title + tiny spinner (same height as network)
                             html.Div(
-                                style={"position": "absolute", "top": "8px", "right": "10px", "zIndex": 1200},
-                                children=dcc.Loading(
-                                    id="combined-loading",
-                                    type="dot",
-                                    children=html.Div(id="combined-loading-sentinel", style={"width": 1, "height": 1})
-                                ),
+                                className="title-wrap",
+                                children=[
+                                    html.Div(id="combined-map-title", className="title-chip"),
+                                    html.Div(
+                                        className="title-spinner",
+                                        children=dcc.Loading(
+                                            id="combined-loading",
+                                            type="dot",
+                                            children=html.Div(id="combined-loading-sentinel", style={"width": 1, "height": 1}),
+                                        ),
+                                    ),
+                                ],
                             ),
-
-                            # Map (no full-overlay loader)
+            
                             dcc.Graph(id="combined-map", style={"height": "85vh"}, config=GRAPH_CONFIG),
                         ],
                     ),
                 ],
             ),
+
 
             # FOOTER
             html.Footer(
@@ -577,17 +584,22 @@ if data_load_success:
         return base
 
     # NETWORK MAP ---------------------------------------------------------------
+# NETWORK MAP
 @app.callback(
-    [Output("network-map", "figure"),
-     Output("network-map-title", "children"),
-     Output("network-loading-sentinel", "children")],  # drives the spinner
-    [Input("master-market-type-filter", "value"),
-     Input("season-toggle", "value"),
-     Input("network-time-slider", "value"),
-     Input("opacity-dropdown", "value"),
-     Input("toggle-routes", "value"),
-     Input("layer-toggles", "value")],
-    [State("network-map", "relayoutData")]
+    [
+        Output("network-map", "figure"),
+        Output("network-map-title", "children"),
+        Output("network-loading-sentinel", "children"),  # drives the spinner
+    ],
+    [
+        Input("master-market-type-filter", "value"),
+        Input("season-toggle", "value"),
+        Input("network-time-slider", "value"),
+        Input("opacity-dropdown", "value"),
+        Input("toggle-routes", "value"),
+        Input("layer-toggles", "value"),
+    ],
+    [State("network-map", "relayoutData")],
 )
 def update_network_map(selected_market_type, selected_season, time_value, opacity_percent, toggle_value, layer_toggles, relayout_data):
     time_map = {0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}
@@ -596,19 +608,15 @@ def update_network_map(selected_market_type, selected_season, time_value, opacit
     if opacity_percent is None:
         opacity_percent = 70
 
-    # Filter data
     df_flow = network_df[(network_df["season"] == selected_season) & (network_df["Time Period"] == selected_time)]
     if selected_market_type and selected_market_type != "All Markets":
         df_flow = df_flow[df_flow["mkt_type"] == selected_market_type]
-
     df_map = df_flow[df_flow["share"] > 0].copy()
     df_vol = market_volume_df[(market_volume_df["season"] == selected_season) & (market_volume_df["Time Period"] == selected_time)]
 
-    # Basemap and overlays
     mapbox_style = MAPBOX_STYLE_DARK if "show_nightlights" in layer_toggles else MAPBOX_STYLE_LIGHT
     layers = []
 
-    # Nightlights image overlay
     key_lookup = {"10 Yrs Ago": "10_yrs_ago", "5 Yrs Ago": "5_yrs_ago", "Now": "now"}
     nl_key = key_lookup[selected_time]
     if "show_nightlights" in layer_toggles and nl_key in nightlights_data:
@@ -618,19 +626,10 @@ def update_network_map(selected_market_type, selected_season, time_value, opacit
         except Exception:
             pass
 
-    # Roads GeoJSON overlay
     if "show_roads" in layer_toggles and selected_time in roads_data:
         road_color = "rgba(211, 211, 211, 0.6)" if "show_nightlights" in layer_toggles else "rgba(100, 100, 100, 0.7)"
-        layers.append({
-            "sourcetype": "geojson",
-            "source": roads_data[selected_time],
-            "type": "line",
-            "color": road_color,
-            "line": {"width": 0.8},
-            "below": "traces",
-        })
+        layers.append({"sourcetype": "geojson", "source": roads_data[selected_time], "type": "line", "color": road_color, "line": {"width": 0.8}, "below": "traces"})
 
-    # Keep current view if possible
     zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
     if relayout_data and "mapbox.center" in relayout_data:
         zoom = relayout_data.get("mapbox.zoom", zoom)
@@ -640,55 +639,36 @@ def update_network_map(selected_market_type, selected_season, time_value, opacit
 
     if "show_markers" in layer_toggles:
         opacity = opacity_percent / 100.0
-        routes_visible = _safe_bool_contains(toggle_value, "show")
+        routes_visible = bool(toggle_value) and ("show" in toggle_value)
 
         share_bins = [
-            {"name": "High Share (>75%)",    "data": df_map[df_map["share"] >= 75],                             "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
-            {"name": "Medium Share (25-75%)","data": df_map[(df_map["share"] < 75) & (df_map["share"] >= 25)],  "width": 2, "color": f"rgba(117, 112, 179, {opacity})"},
-            {"name": "Low Share (<25%)",     "data": df_map[df_map["share"] < 25],                              "width": 1, "color": f"rgba(102, 166, 30, {opacity})"},
+            {"name": "High Share (>75%)", "data": df_map[df_map["share"] >= 75], "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
+            {"name": "Medium Share (25-75%)", "data": df_map[(df_map["share"] < 75) & (df_map["share"] >= 25)], "width": 2, "color": f"rgba(117, 112, 179, {opacity})"},
+            {"name": "Low Share (<25%)", "data": df_map[df_map["share"] < 25], "width": 1, "color": f"rgba(102, 166, 30, {opacity})"},
         ]
-
-        # Trade routes
         for s_bin in share_bins:
             if not s_bin["data"].empty:
                 lats = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
                 lons = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
-                fig.add_trace(
-                    go.Scattermapbox(
-                        lat=lats, lon=lons, mode="lines",
-                        line=dict(width=s_bin["width"], color=s_bin["color"]),
-                        name=s_bin["name"], hoverinfo="none", visible=routes_visible,
-                    )
-                )
+                fig.add_trace(go.Scattermapbox(lat=lats, lon=lons, mode="lines", line=dict(width=s_bin["width"], color=s_bin["color"]), name=s_bin["name"], hoverinfo="none", visible=routes_visible))
 
         if not df_map.empty:
-            # Origins
             origins = (
                 df_map[["origin_name", "origin_lat", "origin_lon"]].drop_duplicates()
-                .merge(
-                    df_map.groupby("origin_name", observed=True)["mkt_name"].nunique().reset_index(name="market_count"),
-                    on="origin_name",
-                )
+                .merge(df_map.groupby("origin_name", observed=True)["mkt_name"].nunique().reset_index(name="market_count"), on="origin_name")
             )
             origins["hover_text"] = origins["origin_name"] + "<br>Supplies " + origins["market_count"].astype(int).astype(str) + " market(s)"
-            fig.add_trace(
-                go.Scattermapbox(
-                    lat=origins["origin_lat"], lon=origins["origin_lon"], mode="markers",
-                    marker=dict(size=(5 + origins["market_count"]), color="#a50f15", opacity=0.9),
-                    name="Produce Origin", text=origins["hover_text"], hoverinfo="text",
-                )
-            )
+            fig.add_trace(go.Scattermapbox(lat=origins["origin_lat"], lon=origins["origin_lon"], mode="markers",
+                                           marker=dict(size=(5 + origins["market_count"]), color="#a50f15", opacity=0.9),
+                                           name="Produce Origin", text=origins["hover_text"], hoverinfo="text"))
 
-            # Markets
             markets = (
                 df_map[["mkt_id", "mkt_name", "market_lat", "market_lon", "mkt_type"]].drop_duplicates()
-                .merge(df_vol[["mkt_id", "Total Volume"]], on="mkt_id", how="left")
-                .fillna(0)
+                .merge(df_vol[["mkt_id", "Total Volume"]], on="mkt_id", how="left").fillna(0)
             )
             market_hover_info = (
                 df_map.assign(origin_share_str=df_map["origin_name"].astype(str) + ": " + df_map["share"].astype(int).astype(str) + "%")
-                .groupby("mkt_name", observed=True)["origin_share_str"].apply("<br>".join)
-                .reset_index(name="details")
+                .groupby("mkt_name", observed=True)["origin_share_str"].apply("<br>".join).reset_index(name="details")
             )
             markets = markets.merge(market_hover_info, on="mkt_name", how="left")
             markets["hover_text"] = (
@@ -697,56 +677,46 @@ def update_network_map(selected_market_type, selected_season, time_value, opacit
                 + "--- Origins ---<br>" + markets["details"].fillna("n/a")
             )
             markets["size"] = 4 + (markets["Total Volume"].clip(lower=0) ** 0.5) * 0.08
-            fig.add_trace(
-                go.Scattermapbox(
-                    lat=markets["market_lat"], lon=markets["market_lon"], mode="markers",
-                    marker=dict(size=markets["size"], color="blue", opacity=0.9),
-                    name="Market", text=markets["hover_text"], hoverinfo="text",
-                )
-            )
+            fig.add_trace(go.Scattermapbox(lat=markets["market_lat"], lon=markets["market_lon"], mode="markers",
+                                           marker=dict(size=markets["size"], color="blue", opacity=0.9),
+                                           name="Market", text=markets["hover_text"], hoverinfo="text"))
         else:
-            fig.add_annotation(
-                text="No trade flow data for this selection.",
-                showarrow=False,
-                font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"),
-            )
+            fig.add_annotation(text="No trade flow data for this selection.", showarrow=False,
+                               font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"))
 
-    # Invisible anchor (stabilize viewport)
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=[0], lon=[37.5], mode="markers",
-            marker=dict(size=0.1, color="rgba(0,0,0,0)"),
-            showlegend=False, hoverinfo="none",
-        )
-    )
+    fig.add_trace(go.Scattermapbox(lat=[0], lon=[37.5], mode="markers",
+                                   marker=dict(size=0.1, color="rgba(0,0,0,0)"),
+                                   showlegend=False, hoverinfo="none"))
 
     fig.update_layout(
         margin=dict(r=0, l=0, b=0, t=0),
         uirevision="keep",
         showlegend=True,
-        legend=dict(
-            yanchor="top", y=0.92, xanchor="right", x=0.99,
-            bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.1)", borderwidth=1,
-            traceorder="normal", itemsizing="constant", font=dict(size=11),
-        ),
+        legend=dict(yanchor="top", y=0.92, xanchor="right", x=0.99,
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.1)", borderwidth=1,
+                    traceorder="normal", itemsizing="constant", font=dict(size=11)),
         mapbox=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
         transition={"duration": 300},
     )
     map_title = f"{selected_season} - {selected_time}"
-    return fig, map_title, ""   # ping sentinel → shows spinner under title
+    return fig, map_title, ""  # ping spinner
 
-# COMBINED MAP --------------------------------------------------------------
+# COMBINED MAP
 @app.callback(
-    [Output("combined-map", "figure"),
-     Output("combined-map-title", "children"),
-     Output("combined-loading-sentinel", "children")],   # if you kept the combined spinner
-    [Input("master-market-type-filter", "value"),
-     Input("data-type-toggle", "value"),
-     Input("view-type-toggle", "value"),
-     Input("combined-trader-type-dropdown", "value"),
-     Input("combined-season-toggle", "value"),
-     Input("combined-time-slider", "value")],
-    [State("combined-map", "relayoutData")]
+    [
+        Output("combined-map", "figure"),
+        Output("combined-map-title", "children"),
+        Output("combined-loading-sentinel", "children"),  # drives the tiny spinner
+    ],
+    [
+        Input("master-market-type-filter", "value"),
+        Input("data-type-toggle", "value"),
+        Input("view-type-toggle", "value"),
+        Input("combined-trader-type-dropdown", "value"),
+        Input("combined-season-toggle", "value"),
+        Input("combined-time-slider", "value"),
+    ],
+    [State("combined-map", "relayoutData")],
 )
 def update_combined_map(market_type, data_type, view_type, selected_trader, selected_season, time_value, relayout_data):
     time_map = {0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}
@@ -782,21 +752,14 @@ def update_combined_map(market_type, data_type, view_type, selected_trader, sele
         fig.add_annotation(text="No data available for this selection.", showarrow=False)
     else:
         df["hover_text"] = "<b>" + df["mkt_name"] + "</b><br>" + colorbar_title + ": " + df[z_value_col].round(0).astype(int).apply(lambda x: f"{x:,}")
-
         if view_type == "points":
-            if data_type == "tomatoes":
-                df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * 0.1
-            else:
-                df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * 0.8
-
+            df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * (0.1 if data_type == "tomatoes" else 0.8)
             fig.add_trace(
                 go.Scattermapbox(
                     lat=df["lat"], lon=df["lon"], mode="markers",
                     marker=dict(
-                        size=df["size"],
-                        color=df[z_value_col],
-                        colorscale=colorscale, cmin=0,
-                        cmax=float(df[z_value_col].quantile(0.95)) if len(df) > 1 else None,
+                        size=df["size"], color=df[z_value_col], colorscale=colorscale,
+                        cmin=0, cmax=float(df[z_value_col].quantile(0.95)) if len(df) > 1 else None,
                         showscale=True, colorbar=dict(title=colorbar_title),
                     ),
                     text=df["hover_text"], hoverinfo="text",
@@ -804,20 +767,12 @@ def update_combined_map(market_type, data_type, view_type, selected_trader, sele
             )
         else:
             heatmap_radius = 30 if data_type == "traders" else 20
-            fig.add_trace(
-                go.Densitymapbox(
-                    lat=df["lat"], lon=df["lon"], z=df[z_value_col],
-                    radius=heatmap_radius, colorscale=colorscale,
-                    colorbar=dict(title=colorbar_title),
-                )
-            )
-            fig.add_trace(
-                go.Scattermapbox(
-                    lat=df["lat"], lon=df["lon"], mode="markers",
-                    marker=dict(size=10, color="rgba(0,0,0,0)"),
-                    text=df["hover_text"], hoverinfo="text", showlegend=False,
-                )
-            )
+            fig.add_trace(go.Densitymapbox(lat=df["lat"], lon=df["lon"], z=df[z_value_col],
+                                           radius=heatmap_radius, colorscale=colorscale,
+                                           colorbar=dict(title=colorbar_title)))
+            fig.add_trace(go.Scattermapbox(lat=df["lat"], lon=df["lon"], mode="markers",
+                                           marker=dict(size=10, color="rgba(0,0,0,0)"),
+                                           text=df["hover_text"], hoverinfo="text", showlegend=False))
 
     zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
     if relayout_data and "mapbox.center" in relayout_data:
@@ -830,7 +785,7 @@ def update_combined_map(market_type, data_type, view_type, selected_trader, sele
         mapbox=dict(style=MAPBOX_STYLE_LIGHT, zoom=zoom, center=center),
         transition={"duration": 300},
     )
-    return fig, map_title, ""   # ping combined sentinel if you added it
+    return fig, map_title, ""  # ping spinner
 
 # ------------------------------------------------------------------------------
 # 6) RUN (local) / SERVE (Render)
@@ -840,6 +795,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"  # set DASH_DEBUG=0 on Render if you run this directly
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
 
 
 
