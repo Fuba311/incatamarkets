@@ -128,7 +128,7 @@ app.index_string = """
       }
       
       .title-spinner{
-        margin-top: 6px;     /* ← how far below the bubble the dots sit */
+        margin-top: 18px;     /* ← how far below the bubble the dots sit */
       }
       
       /* optional: make dots a little smaller */
@@ -805,6 +805,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"  # set DASH_DEBUG=0 on Render if you run this directly
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
 
 
 
