@@ -190,47 +190,6 @@ GRAPH_CONFIG = {
 def _safe_bool_contains(container, value):
     return bool(container) and (value in container)
 
-# --- NEW: Helpers for nightlights fix ----------------------------------------
-def _to_data_uri(b64_or_uri: str, mime="image/png") -> str:
-    """Ensure Mapbox gets a proper data URI; accept already-prefixed URIs."""
-    if not isinstance(b64_or_uri, str):
-        return ""
-    if b64_or_uri.strip().startswith("data:image"):
-        return b64_or_uri.strip()
-    return f"data:{mime};base64,{b64_or_uri.strip()}"
-
-def _lonlat_pair(p):
-    """Ensure [lon,lat] ordering for a 2-item list/tuple."""
-    if not isinstance(p, (list, tuple)) or len(p) != 2:
-        return p
-    a, b = p[0], p[1]
-    # If first looks like latitude (|a|<=90) and second looks like longitude (|b|<=180), swap
-    if abs(a) <= 90 and abs(b) <= 180 and abs(a) >= 0 and abs(b) >= 0:
-        # Ambiguous cases (e.g., 0.5, 37.5) will be swapped if they look like lat,lon.
-        if abs(a) <= 90 and abs(b) > 90:
-            # clearly lat,lon -> swap
-            return [b, a]
-        # If both <=90, we try a heuristic: if |b| > |a| and |b|> 20, likely lon.
-        if abs(b) > abs(a) and abs(b) > 20:
-            return [b, a]
-    # If looks like lon,lat already, keep
-    return [a, b]
-
-def _normalize_image_coords(coords):
-    """Return 4 corners in Mapbox's expected order as [TL, TR, BR, BL] in [lon,lat]."""
-    if not isinstance(coords, (list, tuple)) or len(coords) != 4:
-        return coords
-    fixed = [_lonlat_pair(c) for c in coords]
-    # Try to re-order if needed to [TL, TR, BR, BL]
-    # Heuristic: sort by lat desc for top two, then lon asc for left/right
-    try:
-        pts = [{"lon": c[0], "lat": c[1], "raw": c} for c in fixed]
-        top = sorted(sorted(pts, key=lambda x: x["lat"], reverse=True)[:2], key=lambda x: x["lon"])
-        bottom = sorted(sorted(pts, key=lambda x: x["lat"])[:2], key=lambda x: x["lon"])
-        return [top[0]["raw"], top[1]["raw"], bottom[1]["raw"], bottom[0]["raw"]]
-    except Exception:
-        return fixed
-
 # ------------------------------------------------------------------------------
 # 4) LAYOUT
 # ------------------------------------------------------------------------------
@@ -611,35 +570,60 @@ if data_load_success:
 
         layers = []
 
-        # ---- FIX: nightlights plotted UNDER traces and guaranteed to render ----
+        # FIXED: Add nightlights layer first (bottom-most layer)
         key_lookup = {"10 Yrs Ago": "10_yrs_ago", "5 Yrs Ago": "5_yrs_ago", "Now": "now"}
         nl_key = key_lookup[selected_time]
         if "show_nightlights" in layer_toggles and nl_key in nightlights_data:
             try:
                 b64_img, coords = nightlights_data[nl_key]
-                data_uri = _to_data_uri(b64_img)  # ensure proper data URI
-                coords = _normalize_image_coords(coords)  # robust lon/lat ordering
-                layers.append({
-                    "sourcetype": "image",
-                    "source": data_uri,
-                    "coordinates": coords,            # [TL, TR, BR, BL] in [lon,lat]
-                    "opacity": 0.85,
-                    "below": "traces"                 # <<< keep under markers/routes
-                })
+                
+                # Ensure proper data URI format
+                if not b64_img.startswith("data:"):
+                    b64_img = f"data:image/png;base64,{b64_img}"
+                
+                # Ensure coordinates are in the correct format [lon, lat] for each corner
+                # Expected order: top-left, top-right, bottom-right, bottom-left
+                if coords and len(coords) == 4:
+                    # Convert to ensure [lon, lat] format if needed
+                    formatted_coords = []
+                    for coord in coords:
+                        if len(coord) == 2:
+                            # Ensure lon, lat order (lon is typically larger in Africa)
+                            lon, lat = coord[0], coord[1]
+                            # Simple check: if first value is smaller and in lat range, swap
+                            if abs(lon) <= 90 and abs(lat) > 90:
+                                lon, lat = lat, lon
+                            formatted_coords.append([lon, lat])
+                    
+                    if len(formatted_coords) == 4:
+                        layers.append({
+                            "sourcetype": "image",
+                            "source": b64_img,
+                            "coordinates": formatted_coords,
+                            "opacity": 0.75,  # Reduced opacity for better visibility
+                            "below": "traces"  # Place below all traces
+                        })
+                        print(f"DEBUG: Nightlights layer added for {nl_key}")
             except Exception as e:
-                print(f"Nightlights overlay error for '{nl_key}': {e}")
+                print(f"ERROR: Failed to add nightlights for '{nl_key}': {e}")
+                import traceback
+                traceback.print_exc()
 
-        # ---- FIX: roads ABOVE nightlights but still under traces ---------------
+        # FIXED: Add roads layer second (above nightlights but below traces)
         if "show_roads" in layer_toggles and selected_time in roads_data:
-            road_color = "rgba(211, 211, 211, 0.75)" if "show_nightlights" in layer_toggles else "rgba(100, 100, 100, 0.7)"
+            # Use light gray roads on dark background, darker roads on light background
+            road_color = "rgba(200, 200, 200, 0.8)" if "show_nightlights" in layer_toggles else "rgba(100, 100, 100, 0.7)"
+            road_width = 1.2 if "show_nightlights" in layer_toggles else 0.9
+            
             layers.append({
                 "sourcetype": "geojson",
                 "source": roads_data[selected_time],
                 "type": "line",
                 "color": road_color,
-                "line": {"width": 0.9},
-                "below": "traces"                 # <<< still under markers/routes
+                "line": {"width": road_width},
+                "below": "traces"  # Place below traces but will be above nightlights due to order
             })
+            print(f"DEBUG: Roads layer added for {selected_time}")
 
         # Preserve user pan/zoom
         zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
@@ -702,10 +686,11 @@ if data_load_success:
                 fig.add_annotation(text="No trade flow data for this selection.", showarrow=False,
                                    font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"))
 
-        # Invisible tiny trace to keep Mapbox happy when layers only
-        fig.add_trace(go.Scattermapbox(lat=[0], lon=[37.5], mode="markers",
-                                       marker=dict(size=0.1, color="rgba(0,0,0,0)"),
-                                       showlegend=False, hoverinfo="none"))
+        # Always add an invisible trace to ensure Mapbox renders properly
+        fig.add_trace(go.Scattermapbox(
+            lat=[0], lon=[37.5], mode="markers",
+            marker=dict(size=0.01, color="rgba(0,0,0,0)"),
+            showlegend=False, hoverinfo="none"))
 
         fig.update_layout(
             margin=dict(r=0, l=0, b=0, t=0),
@@ -714,9 +699,15 @@ if data_load_success:
             legend=dict(yanchor="top", y=0.92, xanchor="right", x=0.99,
                         bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.1)", borderwidth=1,
                         traceorder="normal", itemsizing="constant", font=dict(size=11)),
-            mapbox=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
+            mapbox=dict(
+                style=mapbox_style, 
+                layers=layers,  # Layers will be drawn in order: nightlights first, then roads
+                zoom=zoom, 
+                center=center
+            ),
             transition={"duration": 300},
         )
+        
         map_title = f"{selected_season} - {selected_time}"
         return fig, map_title, ""  # ping spinner
 
@@ -813,6 +804,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
-
-
 
