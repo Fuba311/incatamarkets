@@ -673,7 +673,7 @@ if data_load_success:
                         "sourcetype": "image",
                         "source": img,               # accepts base64 or full data URI
                         "coordinates": coords,       # [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]
-                        "opacity": 0.75,             # multiply with any per-pixel alpha
+                        "opacity": 0.55,             # multiply with any per-pixel alpha
                         "below": "traces"            # go under roads & markers
                     })
             except Exception as e:
@@ -871,3 +871,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
