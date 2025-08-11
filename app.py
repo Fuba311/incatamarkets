@@ -121,6 +121,94 @@ roads_data = {}
 nightlights_data = {}
 data_load_success = False
 
+def _ensure_data_uri(s: str) -> str:
+    if not isinstance(s, str): return ""
+    s = s.strip()
+    return s if s.startswith("data:image") else f"data:image/png;base64,{s}"
+
+def _normalize_coords(coords):
+    """Return corners as [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]; fix [lat,lon] if needed."""
+    if not coords or len(coords) != 4:
+        return None
+    fixed = []
+    for c in coords:
+        if not isinstance(c, (list, tuple)) or len(c) != 2: return None
+        lon, lat = c
+        # swap if clearly [lat, lon]
+        if abs(lon) <= 90 and abs(lat) > 90:
+            lon, lat = lat, lon
+        fixed.append([float(lon), float(lat)])
+    # reorder to TL, TR, BR, BL using lat/long sorting
+    pts = [{"i": i, "lon": p[0], "lat": p[1]} for i, p in enumerate(fixed)]
+    top2 = sorted(sorted(pts, key=lambda x: x["lat"], reverse=True)[:2], key=lambda x: x["lon"])
+    bot2 = sorted(sorted(pts, key=lambda x: x["lat"])[:2], key=lambda x: x["lon"])
+    return [[top2[0]["lon"], top2[0]["lat"]], [top2[1]["lon"], top2[1]["lat"]],
+            [bot2[1]["lon"], bot2[1]["lat"]], [bot2[0]["lon"], bot2[0]["lat"]]]
+
+def _default_bbox_coords():
+    """If no coords in JSON, fit to data extent (with padding)."""
+    lats, lons = [], []
+    if network_df is not None:
+        for c in ("origin_lat", "market_lat"): 
+            if c in network_df.columns: lats += pd.to_numeric(network_df[c], errors="coerce").dropna().tolist()
+        for c in ("origin_lon", "market_lon"): 
+            if c in network_df.columns: lons += pd.to_numeric(network_df[c], errors="coerce").dropna().tolist()
+    if trader_df is not None:
+        if "lat" in trader_df.columns: lats += pd.to_numeric(trader_df["lat"], errors="coerce").dropna().tolist()
+        if "lon" in trader_df.columns: lons += pd.to_numeric(trader_df["lon"], errors="coerce").dropna().tolist()
+    if lats and lons:
+        latS, latN = min(lats), max(lats)
+        lonW, lonE = min(lons), max(lons)
+        pad_lat = max(0.1, (latN - latS) * 0.05)
+        pad_lon = max(0.1, (lonE - lonW) * 0.05)
+        return [[lonW - pad_lon, latN + pad_lat], [lonE + pad_lon, latN + pad_lat],
+                [lonE + pad_lon, latS - pad_lat], [lonW - pad_lon, latS - pad_lat]]
+    # Kenya fallback
+    return [[33.9, 5.2], [41.9, 5.2], [41.9, -4.9], [33.9, -4.9]]
+
+def _norm_key(s: str) -> str:
+    return str(s).strip().lower().replace("_", "").replace(" ", "")
+
+def _get_nl_image_and_coords(store, selected_time):
+    """
+    Accept:
+      - dict with keys like "Now"/"5 Yrs Ago"/"10 Yrs Ago" OR "now"/"5_yrs_ago"/"10_yrs_ago"
+      - plain string (image only)
+      - list/tuple [image, coords]
+      - dict {"image": ..., "coordinates": ...}
+    Returns (image_data_uri, coords_list)
+    """
+    if isinstance(store, str):
+        return _ensure_data_uri(store), _default_bbox_coords()
+
+    if isinstance(store, dict):
+        # try direct key (pretty) and normalized/underscore variants
+        pretty = selected_time
+        alt = {"Now": "now", "5 Yrs Ago": "5_yrs_ago", "10 Yrs Ago": "10_yrs_ago"}.get(selected_time, selected_time)
+        targets = {_norm_key(pretty), _norm_key(alt)}
+
+        chosen_val = None
+        for k, v in store.items():
+            if _norm_key(k) in targets:
+                chosen_val = v
+                break
+        if chosen_val is None and len(store) == 1:
+            chosen_val = next(iter(store.values()))
+        if chosen_val is None:
+            return None, None
+
+        if isinstance(chosen_val, str):
+            return _ensure_data_uri(chosen_val), _default_bbox_coords()
+        if isinstance(chosen_val, (list, tuple)) and len(chosen_val) == 2:
+            img, coords = chosen_val
+            return _ensure_data_uri(img), (_normalize_coords(coords) or _default_bbox_coords())
+        if isinstance(chosen_val, dict):
+            img = chosen_val.get("image") or chosen_val.get("img")
+            coords = chosen_val.get("coordinates") or chosen_val.get("coords")
+            return _ensure_data_uri(img), (_normalize_coords(coords) or _default_bbox_coords())
+
+    return None, None
+
 try:
     # Core tabular data
     network_df = pd.read_parquet(PROCESSED_DATA_FOLDER / "network_df.parquet")
@@ -140,15 +228,20 @@ try:
     if roads_data:
         print("SUCCESS: Roads GeoJSON overlays loaded.")
 
-    # Nightlights overlay JSON format:
-    # { 'now' | '5_yrs_ago' | '10_yrs_ago': [<b64_png_without_prefix_or_dataURI>, [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]] }
-    nl_path = PROCESSED_DATA_FOLDER / "nightlights_data.json"
-    if nl_path.exists():
-        with open(nl_path, "r", encoding="utf-8") as f:
-            nightlights_data = json.load(f)
-        print("SUCCESS: Nightlights overlay loaded.")
+    # Nightlights: try a few filenames (supports your rename to 'nightlights_data_*.json')
+    nl_candidates = [
+        PROCESSED_DATA_FOLDER / "nightlights_data_.json",
+        PROCESSED_DATA_FOLDER / "nightlights_data.json",
+        PROCESSED_DATA_FOLDER / "nightlights.json",
+    ]
+    for nl_path in nl_candidates:
+        if nl_path.exists():
+            with open(nl_path, "r", encoding="utf-8") as f:
+                nightlights_data = json.load(f)
+            print(f"SUCCESS: Nightlights overlay loaded from {nl_path.name}")
+            break
     else:
-        print(f"Warning: Nightlights JSON not found at {nl_path}")
+        print("Warning: No nightlights JSON found (tried nightlights_data_.json, nightlights_data.json, nightlights.json)")
 
     print("--- All data loaded successfully ---")
     print("Unique trader types:", sorted([x for x in trader_df["trader_id"].dropna().unique()]))
@@ -570,66 +663,34 @@ if data_load_success:
 
         layers = []
 
-        # FIXED: Nightlights with "green screen" effect - black becomes transparent on dark map
-        key_lookup = {"10 Yrs Ago": "10_yrs_ago", "5 Yrs Ago": "5_yrs_ago", "Now": "now"}
-        nl_key = key_lookup[selected_time]
-        if "show_nightlights" in layer_toggles and nl_key in nightlights_data:
+        # NIGHTLIGHTS (robust: file rename + key variants + coords fallback)
+        if "show_nightlights" in layer_toggles and nightlights_data:
             try:
-                b64_img, coords = nightlights_data[nl_key]
-                
-                # Ensure proper data URI format
-                if not b64_img.startswith("data:"):
-                    b64_img = f"data:image/png;base64,{b64_img}"
-                
-                # Ensure coordinates are in the correct format [lon, lat] for each corner
-                if coords and len(coords) == 4:
-                    # Convert to ensure [lon, lat] format
-                    formatted_coords = []
-                    for coord in coords:
-                        if len(coord) == 2:
-                            lon, lat = coord[0], coord[1]
-                            # Swap if needed (lat typically smaller than lon in Africa)
-                            if abs(lon) <= 90 and abs(lat) > 90:
-                                lon, lat = lat, lon
-                            formatted_coords.append([lon, lat])
-                    
-                    if len(formatted_coords) == 4:
-                        # Use moderate opacity - on dark background, black pixels become nearly invisible
-                        # while bright nightlight pixels remain visible (simulating transparency)
-                        layers.append({
-                            "sourcetype": "image",
-                            "source": b64_img,
-                            "coordinates": formatted_coords,
-                            "opacity": 0.6,  # Key setting: makes black transparent-ish on dark map
-                            "below": "traces"  # Place below all traces
-                        })
-                        print(f"DEBUG: Nightlights layer added for {nl_key}")
-                        print(f"DEBUG: Image data URI starts with: {b64_img[:50]}...")
-                        print(f"DEBUG: Coordinates: {formatted_coords}")
+                img, coords = _get_nl_image_and_coords(nightlights_data, selected_time)
+                if img:
+                    coords = coords or _default_bbox_coords()
+                    layers.append({
+                        "sourcetype": "image",
+                        "source": img,               # accepts base64 or full data URI
+                        "coordinates": coords,       # [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]
+                        "opacity": 0.75,             # multiply with any per-pixel alpha
+                        "below": "traces"            # go under roads & markers
+                    })
             except Exception as e:
-                print(f"ERROR: Failed to add nightlights for '{nl_key}': {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"ERROR: nightlights layer: {e}")
 
-        # FIXED: Roads layer with better visibility
+        # ROADS (above nightlights; still below traces)
         if "show_roads" in layer_toggles and selected_time in roads_data:
-            # Brighter roads when nightlights are on, normal when off
-            if "show_nightlights" in layer_toggles:
-                road_color = "rgba(255, 255, 255, 0.4)"  # White roads on dark background
-                road_width = 1.5
-            else:
-                road_color = "rgba(100, 100, 100, 0.7)"  # Gray roads on light background  
-                road_width = 0.9
-            
+            road_color = "rgba(255,255,255,0.45)" if "show_nightlights" in layer_toggles else "rgba(100,100,100,0.7)"
+            road_width = 1.3 if "show_nightlights" in layer_toggles else 0.9
             layers.append({
                 "sourcetype": "geojson",
                 "source": roads_data[selected_time],
                 "type": "line",
                 "color": road_color,
                 "line": {"width": road_width},
-                "below": "traces"  # Place below traces but above nightlights due to order
+                "below": "traces"
             })
-            print(f"DEBUG: Roads layer added for {selected_time}")
 
         # Preserve user pan/zoom
         zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
@@ -707,7 +768,7 @@ if data_load_success:
                         traceorder="normal", itemsizing="constant", font=dict(size=11)),
             mapbox=dict(
                 style=mapbox_style, 
-                layers=layers,  # Layers will be drawn in order: nightlights first, then roads
+                layers=layers,  # order matters: nightlights first, then roads
                 zoom=zoom, 
                 center=center
             ),
