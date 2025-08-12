@@ -812,7 +812,7 @@ if data_load_success:
                         colorbar=dict(title="Businesses")
                     ))
                     # Empty markers just to stabilize hover if you ever want it
-                    fig.add_trace(go.Scattermap(
+                    fig.add_trace(go.Scattermapbox(
                         lat=g["lat"], lon=g["lon"], mode="markers",
                         marker=dict(size=10, color="rgba(0,0,0,0)"),
                         hoverinfo="skip", showlegend=False
@@ -1103,6 +1103,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
 
 
 
