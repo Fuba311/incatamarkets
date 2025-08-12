@@ -746,10 +746,11 @@ if data_load_success:
                     coords = coords or _default_bbox_coords()
                     layers.append({
                         "sourcetype": "image",
-                        "source": img,
-                        "coordinates": coords,
+                        "type": "raster",              # <- required for image in MapLibre
+                        "source": img,        # your base64 data URI
+                        "coordinates": coords,         # [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]
                         "opacity": 0.70,
-                        "below": "traces"
+                        "below": "traces"              # keep it under your markers/lines
                     })
             except Exception as e:
                 print(f"ERROR: nightlights layer: {e}")
@@ -769,9 +770,9 @@ if data_load_success:
 
         # Preserve user pan/zoom
         zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
-        if relayout_data and "mapbox.center" in relayout_data:
-            zoom = relayout_data.get("mapbox.zoom", zoom)
-            center = relayout_data.get("mapbox.center", center)
+        if relayout_data and "map.center" in relayout_data:
+            zoom = relayout_data.get("map.zoom", zoom)
+            center = relayout_data.get("map.center", center)
 
         fig = go.Figure()
 
@@ -806,13 +807,13 @@ if data_load_success:
                 g["size"] = g["size"].clip(lower=8, upper=70)
 
                 if biz_view_mode == "heatmap":
-                    fig.add_trace(go.Densitymapbox(
+                    fig.add_trace(go.Densitymap(
                         lat=g["lat"], lon=g["lon"], z=g["count"],
                         radius=34, colorscale="Turbo",
                         colorbar=dict(title="Businesses")
                     ))
                     # Empty markers just to stabilize hover if you ever want it
-                    fig.add_trace(go.Scattermapbox(
+                    fig.add_trace(go.Scattermap(
                         lat=g["lat"], lon=g["lon"], mode="markers",
                         marker=dict(size=10, color="rgba(0,0,0,0)"),
                         hoverinfo="skip", showlegend=False
@@ -822,7 +823,7 @@ if data_load_success:
                     outer = (g["size"] + 12).clip(upper=80)
                     inner = (g["size"] + 6).clip(upper=76)
                     for sz, alpha in [(outer, 0.35), (inner, 0.90)]:
-                        fig.add_trace(go.Scattermapbox(
+                        fig.add_trace(go.Scattermap(
                             lat=g["lat"], lon=g["lon"], mode="markers",
                             marker=dict(size=sz, color=f"rgba(255,255,255,{alpha})", opacity=(biz_opacity/100.0)),
                             hoverinfo="skip", showlegend=False
@@ -835,7 +836,7 @@ if data_load_success:
                     cmax = float(color_values.quantile(0.95)) if len(g) > 1 else None
                     ctitle = "Median dist (km)" if has_dist else "Businesses"
 
-                    fig.add_trace(go.Scattermapbox(
+                    fig.add_trace(go.Scattermap(
                         lat=g["lat"], lon=g["lon"], mode="markers",
                         marker=dict(
                             size=g["size"],
@@ -888,7 +889,7 @@ if data_load_success:
                 if not s_bin["data"].empty:
                     lats = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
                     lons = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
-                    fig.add_trace(go.Scattermapbox(
+                    fig.add_trace(go.Scattermap(
                         lat=lats, lon=lons, mode="lines",
                         line=dict(width=s_bin["width"], color=s_bin["color"]),
                         name=s_bin["name"], hoverinfo="none", visible=routes_visible))
@@ -921,7 +922,7 @@ if data_load_success:
                 origins["market_count"].astype(int).astype(str) + " market(s)"
             )
 
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 lat=origins["origin_lat"],
                 lon=origins["origin_lon"],
                 mode="markers",
@@ -979,7 +980,7 @@ if data_load_success:
                     markets["hover_text"] = base_text
 
                 markets["size"] = 4 + (markets["Total Volume"].clip(lower=0) ** 0.5) * 0.08
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(go.Scattermap(
                     lat=markets["lat"], lon=markets["lon"], mode="markers",
                     marker=dict(size=markets["size"], color="blue", opacity=0.9),
                     name="Market", text=markets["hover_text"], hoverinfo="text"))
@@ -988,7 +989,7 @@ if data_load_success:
                                 font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"))
 
         # Invisible anchor (stabilizes mapbox render)
-        fig.add_trace(go.Scattermapbox(
+        fig.add_trace(go.Scattermap(
             lat=[0], lon=[37.5], mode="markers",
             marker=dict(size=0.01, color="rgba(0,0,0,0)"),
             showlegend=False, hoverinfo="none"))
@@ -1000,7 +1001,7 @@ if data_load_success:
             legend=dict(yanchor="top", y=0.92, xanchor="right", x=0.99,
                         bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.1)", borderwidth=1,
                         traceorder="normal", itemsizing="constant", font=dict(size=11)),
-            mapbox=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
+            map=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
             transition={"duration": 300},
         )
 
@@ -1062,7 +1063,7 @@ if data_load_success:
             if view_type == "points":
                 df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * (0.1 if data_type == "tomatoes" else 0.8)
                 fig.add_trace(
-                    go.Scattermapbox(
+                    go.Scattermap(
                         lat=df["lat"], lon=df["lon"], mode="markers",
                         marker=dict(
                             size=df["size"], color=df[z_value_col], colorscale=colorscale,
@@ -1074,22 +1075,22 @@ if data_load_success:
                 )
             else:
                 heatmap_radius = 30 if data_type == "traders" else 20
-                fig.add_trace(go.Densitymapbox(lat=df["lat"], lon=df["lon"], z=df[z_value_col],
+                fig.add_trace(go.Densitymap(lat=df["lat"], lon=df["lon"], z=df[z_value_col],
                                                radius=heatmap_radius, colorscale=colorscale,
                                                colorbar=dict(title=colorbar_title)))
-                fig.add_trace(go.Scattermapbox(lat=df["lat"], lon=df["lon"], mode="markers",
+                fig.add_trace(go.Scattermap(lat=df["lat"], lon=df["lon"], mode="markers",
                                                marker=dict(size=10, color="rgba(0,0,0,0)"),
                                                text=df["hover_text"], hoverinfo="text", showlegend=False))
 
         zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
-        if relayout_data and "mapbox.center" in relayout_data:
-            zoom = relayout_data.get("mapbox.zoom", zoom)
-            center = relayout_data.get("mapbox.center", center)
+        if relayout_data and "map.center" in relayout_data:
+            zoom = relayout_data.get("map.zoom", zoom)
+            center = relayout_data.get("map.center", center)
 
         fig.update_layout(
             margin=dict(r=0, l=0, b=0, t=0),
             uirevision="keep",
-            mapbox=dict(style=MAPBOX_STYLE_LIGHT, zoom=zoom, center=center),
+            map=dict(style=MAPBOX_STYLE_LIGHT, zoom=zoom, center=center),
             transition={"duration": 300},
         )
         return fig, map_title, ""  # ping spinner
@@ -1103,6 +1104,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
 
 
 
