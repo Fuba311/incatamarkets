@@ -1100,10 +1100,9 @@ if data_load_success:
 # ------------------------------------------------------------------------------
 # app.py (at bottom)
 if __name__ == "__main__":
-    is_render = bool(os.environ.get("RENDER") or os.environ.get("PORT"))
-    host = "0.0.0.0" if is_render else "127.0.0.1"
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
-    print(f"→ Open http://localhost:{port}")
-    app.run(host=host, port=port, debug=debug_flag)
+    app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
+
 
