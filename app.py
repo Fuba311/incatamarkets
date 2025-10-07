@@ -158,23 +158,13 @@ app.index_string = """
 # 2) DATA LOADING
 # ------------------------------------------------------------------------------
 print("--- Loading Pre-Processed Data ---")
-# Resolve processed data directory (env override, then common fallbacks)
-_candidate_paths = []
-_env_dir = os.getenv("PROCESSED_DATA_DIR")
-if _env_dir:
-    _candidate_paths.append(Path(_env_dir))
-_candidate_paths.extend([
-    Path(__file__).parent / "data" / "processed_data",
-])
-PROCESSED_DATA_FOLDER = None
-for _cand in _candidate_paths:
-    if _cand and _cand.exists():
-        PROCESSED_DATA_FOLDER = _cand
-        break
-if PROCESSED_DATA_FOLDER is None:
-    PROCESSED_DATA_FOLDER = _candidate_paths[0]
-    print("Warning: Processed data folder not found; expected one of: " + " | ".join(str(p) for p in _candidate_paths))
+_candidate_processed_roots = [
+    Path(__file__).parent / "processed_data",
+    Path(r"C:\Users\andre\OneDrive\Desktop\BMGF\Tegemeo map\data\processed_data"),
+]
+PROCESSED_DATA_FOLDER = next((p for p in _candidate_processed_roots if p.exists()), _candidate_processed_roots[0])
 print(f"Using processed data folder: {PROCESSED_DATA_FOLDER}")
+
 
 TIME_PERIOD_SUFFIX = {
     "10 Yrs Ago": "10_yrs_ago",
@@ -2066,6 +2056,7 @@ if __name__ == "__main__":
     debug_flag = os.getenv("DASH_DEBUG", "1") == "1"
     print(f"→ Open http://localhost:{port}")
     app.run(host=host, port=port, debug=debug_flag)
+
 
 
 
