@@ -913,7 +913,7 @@ if data_load_success:
                     lons = [item for _, row in df_map.iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
                     fig.add_trace(go.Scattermap(
                         lat=lats, lon=lons, mode="lines",
-                        line=dict(width=3, color=f"rgba(0, 64, 133, {opacity})"),
+                        line=dict(width=2, color=f"rgba(46, 125, 50, {opacity})"),
                         name="Trade Routes", hoverinfo="none", visible=routes_visible))
                 else:
                     share_bins = [
@@ -1145,6 +1145,11 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
+
+
+
+
 
 
 
