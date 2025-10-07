@@ -6,6 +6,7 @@ import os
 import itertools
 from pathlib import Path
 import json
+import math
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.colors as pcolors
@@ -13,24 +14,6 @@ import dash
 from dash import dcc, html, no_update, callback_context
 from dash.dependencies import Input, Output, State, MATCH
 from plotly.colors import qualitative as qual_colors
-
-def _unique_color_sequence(colors):
-    """Return colors with preserved order but without duplicates (case-insensitive)."""
-    seen = set()
-    unique = []
-    for color in colors:
-        key = str(color).lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(color)
-    return unique
-
-# Highly distinct qualitative palette to cycle through per-origin routes in simplified mode.
-ORIGIN_COLOR_PALETTE = _unique_color_sequence(
-    list(qual_colors.Alphabet)
-    + list(qual_colors.Vivid)
-    + list(qual_colors.Safe)
-)
 
 # ------------------------------------------------------------------------------
 # 1) APP INIT
@@ -65,6 +48,17 @@ app.index_string = """
         overflow:visible !important; z-index:1000; transition:width .2s ease;
       }
       .floating-controls.icon-only{ width:46px; overflow:hidden !important; }
+      .floating-controls.network-controls{ width:360px; }
+      .floating-controls.network-controls.icon-only{ width:56px; }
+      .floating-controls.region-controls{ width:220px; }
+      .floating-controls.region-controls.icon-only{ width:56px; }
+      .floating-panel-container{
+        position:absolute; top:16px; left:8px; display:flex; gap:12px; z-index:1000;
+        align-items:flex-start; pointer-events:none;
+      }
+      .floating-panel-container .floating-controls{
+        position:relative; top:auto; left:auto; pointer-events:auto;
+      }
       .control-panel-header{
         display:flex; align-items:center; gap:8px; padding:10px 12px;
         background:var(--panel-header); border-bottom:1px solid #d6ebff; cursor:pointer;
@@ -75,7 +69,7 @@ app.index_string = """
         margin-left:auto; border:1px solid var(--brand); background:var(--brand-soft);
         color:var(--brand); border-radius:6px; font-size:12px; padding:2px 8px; cursor:pointer;
       }
-      .controls-content{ padding:12px; max-height:70vh; overflow:visible !important; }
+      .controls-content{ padding:14px 12px 26px; max-height:70vh; overflow:visible !important; }
       .controls-content.hidden{display:none;}
       #network-map-title{
         position:absolute; top:10px; left:50%; transform:translateX(-50%);
@@ -92,6 +86,12 @@ app.index_string = """
       .lifted-dropdown .Select-menu, .Select-menu{ z-index:5000 !important; }
       .lifted-dropdown .Select__menu{ z-index:5000 !important; }
       @media (max-width:768px){
+        .floating-panel-container{
+          top:56px; left:6px; flex-direction:column; gap:8px;
+        }
+        .floating-panel-container .floating-controls{
+          width:88vw;
+        }
         .floating-controls{ top:56px; left:6px; width:88vw; }
         .floating-controls.icon-only{ width:44px; }
         .controls-content{ overflow-y:auto !important; }
@@ -122,6 +122,13 @@ app.index_string = """
       max-height: 240px !important;
       overflow-y: auto !important;
       }
+      .map-floating-legend{
+        position:absolute; right:18px; bottom:18px; background:rgba(255,255,255,0.92);
+        border:1px solid rgba(0,64,133,0.2); box-shadow:0 4px 12px rgba(0,0,0,0.08);
+        border-radius:10px; padding:10px 14px; font-size:11px; color:#495057;
+        display:none; pointer-events:none;
+      }
+      .map-floating-legend.visible{ display:block; }
       /* Open the Trade Routes opacity dropdown upward (old + new dash) */
       #opacity-dropdown .Select { position: relative !important; }
 
@@ -151,150 +158,207 @@ app.index_string = """
 # 2) DATA LOADING
 # ------------------------------------------------------------------------------
 print("--- Loading Pre-Processed Data ---")
-PROCESSED_DATA_FOLDER = Path(__file__).parent / "processed_data"
+# Resolve processed data directory (env override, then common fallbacks)
+_candidate_paths = []
+_env_dir = os.getenv("PROCESSED_DATA_DIR")
+if _env_dir:
+    _candidate_paths.append(Path(_env_dir))
+_candidate_paths.extend([
+    Path(__file__).parent / "data" / "processed_data",
+])
+PROCESSED_DATA_FOLDER = None
+for _cand in _candidate_paths:
+    if _cand and _cand.exists():
+        PROCESSED_DATA_FOLDER = _cand
+        break
+if PROCESSED_DATA_FOLDER is None:
+    PROCESSED_DATA_FOLDER = _candidate_paths[0]
+    print("Warning: Processed data folder not found; expected one of: " + " | ".join(str(p) for p in _candidate_paths))
+print(f"Using processed data folder: {PROCESSED_DATA_FOLDER}")
 
-network_df = None
-market_volume_df = None
-trader_df = None
-business_df = None  # NEW
-roads_data = {}
-nightlights_data = {}
-data_load_success = False
+TIME_PERIOD_SUFFIX = {
+    "10 Yrs Ago": "10_yrs_ago",
+    "5 Yrs Ago": "5_yrs_ago",
+    "Now": "now",
+}
 
-def _ensure_data_uri(s: str) -> str:
-    if not isinstance(s, str): return ""
-    s = s.strip()
-    return s if s.startswith("data:image") else f"data:image/png;base64,{s}"
+REGION_SPECS = {
+    "kenya": {
+        "label": "Kenya",
+        "data_dir": PROCESSED_DATA_FOLDER,
+        "network_file": "network_df.parquet",
+        "market_volume_file": "market_volume_df.parquet",
+        "trader_file": "trader_df.parquet",
+        "business_file": "business_df.parquet",
+        "nightlights_candidates": [
+            "nightlights_data_.json",
+            "nightlights_data.json",
+            "nightlights.json",
+        ],
+        "roads_pattern": "roads_{suffix}_processed.geojson",
+        "time_periods": ["10 Yrs Ago", "5 Yrs Ago", "Now"],
+        "map_defaults": {"center": {"lat": 0.5, "lon": 37.5}, "zoom": 5.5},
+        "bbox_fallback": [[33.9, 5.2], [41.9, 5.2], [41.9, -4.9], [33.9, -4.9]],
+    },
+    "odisha": {
+        "label": "Odisha (India)",
+        "data_dir": PROCESSED_DATA_FOLDER,
+        "network_file": "network_df_odisha.parquet",
+        "market_volume_file": "market_volume_df_odisha.parquet",
+        "trader_file": "trader_df_odisha.parquet",
+        "business_file": None,
+        "nightlights_candidates": [
+            "nightlights_data_odisha_.json",
+            "nightlights_data_odisha.json",
+        ],
+        "roads_pattern": "roads_{suffix}_odisha_processed.geojson",
+        "time_periods": ["10 Yrs Ago", "Now"],
+        "map_defaults": {"center": {"lat": 20.3, "lon": 85.8}, "zoom": 6.2},
+        "bbox_fallback": [[81.4, 22.7], [87.6, 22.7], [87.6, 18.8], [81.4, 18.8]],
+        "odisha_outside_offset": 1.9,
+        "odisha_within_offset": 0.7,
+    },
+}
 
-def _normalize_coords(coords):
-    """Return corners as [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]; fix [lat,lon] if needed."""
-    if not coords or len(coords) != 4:
-        return None
-    fixed = []
-    for c in coords:
-        if not isinstance(c, (list, tuple)) or len(c) != 2: return None
-        lon, lat = c
-        if abs(lon) <= 90 and abs(lat) > 90:
-            lon, lat = lat, lon
-        fixed.append([float(lon), float(lat)])
-    pts = [{"i": i, "lon": p[0], "lat": p[1]} for i, p in enumerate(fixed)]
-    top2 = sorted(sorted(pts, key=lambda x: x["lat"], reverse=True)[:2], key=lambda x: x["lon"])
-    bot2 = sorted(sorted(pts, key=lambda x: x["lat"])[:2], key=lambda x: x["lon"])
-    return [[top2[0]["lon"], top2[0]["lat"]], [top2[1]["lon"], top2[1]["lat"]],
-            [bot2[1]["lon"], bot2[1]["lat"]], [bot2[0]["lon"], bot2[0]["lat"]]]
+_region_cache = {}
+_region_errors = {}
 
-def _default_bbox_coords():
-    """If no coords in JSON, fit to data extent (with padding)."""
-    lats, lons = [], []
-    if network_df is not None:
-        for c in ("origin_lat", "market_lat"):
-            if c in network_df.columns: lats += pd.to_numeric(network_df[c], errors="coerce").dropna().tolist()
-        for c in ("origin_lon", "market_lon"):
-            if c in network_df.columns: lons += pd.to_numeric(network_df[c], errors="coerce").dropna().tolist()
-    if trader_df is not None:
-        if "lat" in trader_df.columns: lats += pd.to_numeric(trader_df["lat"], errors="coerce").dropna().tolist()
-        if "lon" in trader_df.columns: lons += pd.to_numeric(trader_df["lon"], errors="coerce").dropna().tolist()
-    if business_df is not None:
-        if "lat" in business_df.columns: lats += pd.to_numeric(business_df["lat"], errors="coerce").dropna().tolist()
-        if "lon" in business_df.columns: lons += pd.to_numeric(business_df["lon"], errors="coerce").dropna().tolist()
-    if lats and lons:
-        latS, latN = min(lats), max(lats)
-        lonW, lonE = min(lons), max(lons)
-        pad_lat = max(0.1, (latN - latS) * 0.05)
-        pad_lon = max(0.1, (lonE - lonW) * 0.05)
-        return [[lonW - pad_lon, latN + pad_lat], [lonE + pad_lon, latN + pad_lat],
-                [lonE + pad_lon, latS - pad_lat], [lonW - pad_lon, latS - pad_lat]]
-    return [[33.9, 5.2], [41.9, 5.2], [41.9, -4.9], [33.9, -4.9]]
+def _canonical_region(region_key: str) -> str:
+    return str(region_key or "").strip().lower()
 
-def _norm_key(s: str) -> str:
-    return str(s).strip().lower().replace("_", "").replace(" ", "")
+def _clean_unique(series):
+    if series is None:
+        return []
+    try:
+        values = [v for v in series.dropna().unique() if str(v).strip() and str(v).lower() != "nan"]
+    except Exception:
+        values = []
+    return values
 
-def _get_nl_image_and_coords(store, selected_time):
-    """
-    Accepts flexible shapes; returns (image_data_uri, coords_list)
-    """
-    if isinstance(store, str):
-        return _ensure_data_uri(store), _default_bbox_coords()
+def load_region_data(region_key: str):
+    region_key = _canonical_region(region_key)
+    if not region_key:
+        raise ValueError("Region key is required")
+    if region_key in _region_cache:
+        return _region_cache[region_key]
+    if region_key not in REGION_SPECS:
+        raise ValueError(f"Unknown region '{region_key}'. Available: {', '.join(REGION_SPECS)}")
 
-    if isinstance(store, dict):
-        pretty = selected_time
-        alt = {"Now": "now", "5 Yrs Ago": "5_yrs_ago", "10 Yrs Ago": "10_yrs_ago"}.get(selected_time, selected_time)
-        targets = {_norm_key(pretty), _norm_key(alt)}
+    spec = REGION_SPECS[region_key]
+    data_dir = spec["data_dir"]
+    if not data_dir.exists():
+        raise FileNotFoundError(f"Processed data folder for {spec['label']} not found at {data_dir}")
 
-        chosen_val = None
-        for k, v in store.items():
-            if _norm_key(k) in targets:
-                chosen_val = v
-                break
-        if chosen_val is None and len(store) == 1:
-            chosen_val = next(iter(store.values()))
-        if chosen_val is None:
-            return None, None
+    print(f"Loading processed data for {spec['label']} from {data_dir}")
 
-        if isinstance(chosen_val, str):
-            return _ensure_data_uri(chosen_val), _default_bbox_coords()
-        if isinstance(chosen_val, (list, tuple)) and len(chosen_val) == 2:
-            img, coords = chosen_val
-            return _ensure_data_uri(img), (_normalize_coords(coords) or _default_bbox_coords())
-        if isinstance(chosen_val, dict):
-            img = chosen_val.get("image") or chosen_val.get("img")
-            coords = chosen_val.get("coordinates") or chosen_val.get("coords")
-            return _ensure_data_uri(img), (_normalize_coords(coords) or _default_bbox_coords())
+    def _read_parquet(filename: str) -> pd.DataFrame:
+        path = data_dir / filename
+        if not path.exists():
+            raise FileNotFoundError(f"Missing file: {path}")
+        return pd.read_parquet(path)
 
-    return None, None
+    network_df = _read_parquet(spec["network_file"])
+    market_volume_df = _read_parquet(spec["market_volume_file"])
+    trader_df = _read_parquet(spec["trader_file"])
 
-try:
-    # Core tabular data
-    network_df = pd.read_parquet(PROCESSED_DATA_FOLDER / "network_df.parquet")
-    market_volume_df = pd.read_parquet(PROCESSED_DATA_FOLDER / "market_volume_df.parquet")
-    trader_df = pd.read_parquet(PROCESSED_DATA_FOLDER / "trader_df.parquet")
+    business_df = None
+    if spec.get("business_file"):
+        business_path = data_dir / spec["business_file"]
+        if business_path.exists():
+            business_df = pd.read_parquet(business_path)
+            if "business_label" in business_df.columns:
+                labels = sorted([x for x in business_df["business_label"].dropna().unique()])
+                print(f"SUCCESS: Business table loaded. Types: {labels}")
+            else:
+                print("SUCCESS: Business table loaded (no label column detected).")
+        else:
+            print(f"Info: Business parquet not found for {spec['label']} (expected {business_path.name})")
+    else:
+        print(f"Info: No business dataset configured for {spec['label']}.")
 
-    # NEW: businesses
-    business_path = PROCESSED_DATA_FOLDER / "business_df.parquet"
-    if business_path.exists():
-        business_df = pd.read_parquet(business_path)
-        print("SUCCESS: Business table loaded.")
-        print("Business types:", sorted([x for x in business_df["business_label"].dropna().unique()]))
+    for df in (network_df, market_volume_df):
+        if "Time Period" in df.columns:
+            df["Time Period"] = pd.Categorical(df["Time Period"], categories=spec["time_periods"], ordered=True)
 
-    print("SUCCESS: Parquet tables loaded.")
+    market_types = sorted({
+        val for series in [network_df.get("mkt_type"), market_volume_df.get("mkt_type")] for val in _clean_unique(series)
+    })
 
-    # Preprocessed geospatial overlays
-    time_period_map = {"10 Yrs Ago": "10_yrs_ago", "5 Yrs Ago": "5_yrs_ago", "Now": "now"}
-    for pretty, suffix in time_period_map.items():
-        road_path = PROCESSED_DATA_FOLDER / f"roads_{suffix}_processed.geojson"
+    trader_types = sorted(_clean_unique(trader_df.get("trader_id"))) if "trader_id" in trader_df.columns else []
+
+    roads_data = {}
+    for pretty in spec["time_periods"]:
+        suffix = TIME_PERIOD_SUFFIX.get(pretty)
+        if not suffix:
+            continue
+        road_path = data_dir / spec["roads_pattern"].format(suffix=suffix)
         if road_path.exists():
             with open(road_path, "r", encoding="utf-8") as f:
                 roads_data[pretty] = json.load(f)
+            print(f"SUCCESS: Roads overlay loaded ({pretty})")
         else:
-            print(f"Warning: Road file not found at {road_path}")
-    if roads_data:
-        print("SUCCESS: Roads GeoJSON overlays loaded.")
+            print(f"Info: Road file missing for {spec['label']} ({pretty}) -> {road_path.name}")
 
-    # Nightlights: support a few filenames
-    nl_candidates = [
-        PROCESSED_DATA_FOLDER / "nightlights_data_.json",
-        PROCESSED_DATA_FOLDER / "nightlights_data.json",
-        PROCESSED_DATA_FOLDER / "nightlights.json",
-    ]
-    for nl_path in nl_candidates:
+    nightlights_data = {}
+    for candidate in spec["nightlights_candidates"]:
+        nl_path = data_dir / candidate
         if nl_path.exists():
             with open(nl_path, "r", encoding="utf-8") as f:
                 nightlights_data = json.load(f)
-            print(f"SUCCESS: Nightlights overlay loaded from {nl_path.name}")
+            print(f"SUCCESS: Nightlights overlay loaded from {candidate}")
             break
     else:
-        print("Warning: No nightlights JSON found (tried nightlights_data_.json, nightlights_data.json, nightlights.json)")
+        if spec["nightlights_candidates"]:
+            print(
+                "Info: Nightlights overlay not found for "
+                f"{spec['label']} (tried {', '.join(spec['nightlights_candidates'])})"
+            )
 
-    print("--- All data loaded successfully ---")
-    print("Unique trader types:", sorted([x for x in trader_df["trader_id"].dropna().unique()]))
+    business_types = []
+    if business_df is not None and "business_label" in business_df.columns:
+        business_types = sorted([x for x in business_df["business_label"].dropna().unique()])
+
+    market_count = int(market_volume_df["mkt_id"].nunique()) if "mkt_id" in market_volume_df.columns else len(market_volume_df)
+
+    region_data = {
+        "key": region_key,
+        "label": spec["label"],
+        "network_df": network_df,
+        "market_volume_df": market_volume_df,
+        "trader_df": trader_df,
+        "business_df": business_df,
+        "business_types": business_types,
+        "market_types": market_types,
+        "trader_types": trader_types,
+        "roads_data": roads_data,
+        "nightlights_data": nightlights_data,
+        "time_periods": tuple(spec["time_periods"]),
+        "map_defaults": spec["map_defaults"],
+        "bbox_fallback": spec["bbox_fallback"],
+        "market_count": market_count,
+    }
+    for optional_key in ("odisha_outside_offset", "odisha_within_offset"):
+        if optional_key in spec:
+            region_data[optional_key] = spec[optional_key]
+
+    _region_cache[region_key] = region_data
+    print(f"--- Completed loading for {spec['label']} ---\n")
+    return region_data
+
+DEFAULT_REGION = _canonical_region(os.getenv("INCATA_DEFAULT_REGION", "kenya"))
+if DEFAULT_REGION not in REGION_SPECS:
+    DEFAULT_REGION = "kenya"
+
+initial_region_data = None
+data_load_success = False
+try:
+    initial_region_data = load_region_data(DEFAULT_REGION)
     data_load_success = True
-
 except FileNotFoundError as e:
     print(f"---! FATAL ERROR !---: {e}")
-    print("Please upload the 'processed_data' folder with required files.")
+    print("Please upload the processed data folder for the selected region.")
 except Exception as e:
     print(f"---! UNEXPECTED ERROR !---: {e}")
-
 # ------------------------------------------------------------------------------
 # 3) CONSTANTS & SMALL HELPERS
 # ------------------------------------------------------------------------------
@@ -321,869 +385,1674 @@ GRAPH_CONFIG = {
     ],
 }
 
+BIZ_CONTROLS_BASE_STYLE = {
+    "borderTop": "1px solid #e0e0e0",
+    "marginTop": "14px",
+    "paddingTop": "12px",
+}
+
 def _safe_bool_contains(container, value):
     return bool(container) and (value in container)
+
+
+def _unique_color_sequence(colors):
+    """Return colors with preserved order but without duplicates (case-insensitive)."""
+    seen = set()
+    unique = []
+    for color in colors:
+        key = str(color).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(color)
+    return unique
+
+
+def _resolve_color_rgb(color_value):
+    """Return (r,g,b) tuple for assorted Plotly color formats."""
+    try:
+        if isinstance(color_value, str):
+            lowered = color_value.strip().lower()
+            if lowered.startswith("#"):
+                return pcolors.hex_to_rgb(color_value)
+            if lowered.startswith("rgba"):
+                r, g, b, _ = pcolors.unlabel_rgba(color_value)
+                return int(r), int(g), int(b)
+            r, g, b = pcolors.unlabel_rgb(color_value)
+            return int(r), int(g), int(b)
+        if isinstance(color_value, (tuple, list)) and len(color_value) >= 3:
+            return tuple(int(float(c)) for c in color_value[:3])
+    except Exception:
+        pass
+    return (46, 125, 50)
+
+
+ORIGIN_COLOR_PALETTE = _unique_color_sequence(
+    list(qual_colors.Alphabet)
+    + list(qual_colors.Vivid)
+    + list(qual_colors.Safe)
+)
+
+BAZAR_SAHI_COORDS = (19.37773, 84.56691)
+
+def _ensure_data_uri(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    s = s.strip()
+    return s if s.startswith("data:image") else f"data:image/png;base64,{s}"
+
+
+def _normalize_coords(coords):
+    """Return corners as [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]; fix [lat,lon] if needed."""
+    if not coords or len(coords) != 4:
+        return None
+    fixed = []
+    for c in coords:
+        if not isinstance(c, (list, tuple)) or len(c) != 2:
+            return None
+        lon, lat = c
+        if abs(lon) <= 90 and abs(lat) > 90:
+            lon, lat = lat, lon
+        fixed.append([float(lon), float(lat)])
+    pts = [{"i": i, "lon": p[0], "lat": p[1]} for i, p in enumerate(fixed)]
+    top2 = sorted(sorted(pts, key=lambda x: x["lat"], reverse=True)[:2], key=lambda x: x["lon"])
+    bot2 = sorted(sorted(pts, key=lambda x: x["lat"])[:2], key=lambda x: x["lon"])
+    return [
+        [top2[0]["lon"], top2[0]["lat"]],
+        [top2[1]["lon"], top2[1]["lat"]],
+        [bot2[1]["lon"], bot2[1]["lat"]],
+        [bot2[0]["lon"], bot2[0]["lat"]],
+    ]
+
+
+def _norm_key(s: str) -> str:
+    return str(s).strip().lower().replace("_", "").replace(" ", "")
+
+
+def _default_bbox_coords(region_data):
+    """If no coords in JSON, fit to data extent (with padding)."""
+    if not region_data:
+        return [[33.9, 5.2], [41.9, 5.2], [41.9, -4.9], [33.9, -4.9]]
+
+    lats, lons = [], []
+    network_df = region_data.get("network_df")
+    trader_df_local = region_data.get("trader_df")
+    business_df_local = region_data.get("business_df")
+
+    if network_df is not None:
+        for c in ("origin_lat", "market_lat"):
+            if c in network_df.columns:
+                lats += pd.to_numeric(network_df[c], errors="coerce").dropna().tolist()
+        for c in ("origin_lon", "market_lon"):
+            if c in network_df.columns:
+                lons += pd.to_numeric(network_df[c], errors="coerce").dropna().tolist()
+
+    if trader_df_local is not None:
+        if "lat" in trader_df_local.columns:
+            lats += pd.to_numeric(trader_df_local["lat"], errors="coerce").dropna().tolist()
+        if "lon" in trader_df_local.columns:
+            lons += pd.to_numeric(trader_df_local["lon"], errors="coerce").dropna().tolist()
+
+    if business_df_local is not None:
+        if "lat" in business_df_local.columns:
+            lats += pd.to_numeric(business_df_local["lat"], errors="coerce").dropna().tolist()
+        if "lon" in business_df_local.columns:
+            lons += pd.to_numeric(business_df_local["lon"], errors="coerce").dropna().tolist()
+
+    if lats and lons:
+        lat_s, lat_n = min(lats), max(lats)
+        lon_w, lon_e = min(lons), max(lons)
+        pad_lat = max(0.1, (lat_n - lat_s) * 0.05)
+        pad_lon = max(0.1, (lon_e - lon_w) * 0.05)
+        return [
+            [lon_w - pad_lon, lat_n + pad_lat],
+            [lon_e + pad_lon, lat_n + pad_lat],
+            [lon_e + pad_lon, lat_s - pad_lat],
+            [lon_w - pad_lon, lat_s - pad_lat],
+        ]
+
+    return region_data.get("bbox_fallback") or [[33.9, 5.2], [41.9, 5.2], [41.9, -4.9], [33.9, -4.9]]
+
+
+def _get_nl_image_and_coords(store, selected_time, region_data):
+    """Accept flexible shapes; returns (image_data_uri, coords_list)."""
+    default_bbox = _default_bbox_coords(region_data)
+
+    if isinstance(store, str):
+        return _ensure_data_uri(store), default_bbox
+
+    if isinstance(store, dict):
+        alt = {"Now": "now", "5 Yrs Ago": "5_yrs_ago", "10 Yrs Ago": "10_yrs_ago"}.get(selected_time, selected_time)
+        targets = {_norm_key(selected_time), _norm_key(alt)}
+
+        chosen_val = None
+        for k, v in store.items():
+            if _norm_key(k) in targets:
+                chosen_val = v
+                break
+        if chosen_val is None and len(store) == 1:
+            chosen_val = next(iter(store.values()))
+        if chosen_val is None:
+            return None, None
+
+        if isinstance(chosen_val, str):
+            return _ensure_data_uri(chosen_val), default_bbox
+        if isinstance(chosen_val, (list, tuple)) and len(chosen_val) == 2:
+            img, coords = chosen_val
+            return _ensure_data_uri(img), (_normalize_coords(coords) or default_bbox)
+        if isinstance(chosen_val, dict):
+            img = chosen_val.get("image") or chosen_val.get("img")
+            coords = chosen_val.get("coordinates") or chosen_val.get("coords")
+            return _ensure_data_uri(img), (_normalize_coords(coords) or default_bbox)
+
+    return None, None
+
+def _reposition_odisha_origins(df: pd.DataFrame, region_data: dict) -> pd.DataFrame:
+    """Return copy with origin coordinates nudged for Odisha flows."""
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+    map_defaults = region_data.get("map_defaults", {}) if region_data else {}
+    center = map_defaults.get("center", {"lat": 20.3, "lon": 85.8})
+    center_lat = float(center.get("lat", 20.3))
+    center_lon = float(center.get("lon", 85.8))
+    outside_anchored_lat = 21.5
+    outside_anchored_lon = 82.6
+
+    groupings = df.groupby("origin_name", observed=True)
+    for origin_name, group in groupings:
+        if pd.isna(origin_name):
+            continue
+
+        base_lat = float("nan")
+        base_lon = float("nan")
+        if "origin_lat" in group.columns and "origin_lon" in group.columns:
+            base_lat = group["origin_lat"].dropna().mean()
+            base_lon = group["origin_lon"].dropna().mean()
+        if math.isnan(base_lat) or math.isnan(base_lon):
+            base_lat = group["market_lat"].dropna().mean()
+            base_lon = group["market_lon"].dropna().mean()
+        if math.isnan(base_lat) or math.isnan(base_lon):
+            base_lat, base_lon = center_lat, center_lon
+
+        origin_lower = str(origin_name).strip().lower()
+        if origin_lower.startswith("outside"):
+            new_lat = outside_anchored_lat
+            new_lon = outside_anchored_lon
+        else:
+            new_lat = base_lat
+            new_lon = base_lon
+
+        df.loc[group.index, "origin_lat"] = float(new_lat)
+        df.loc[group.index, "origin_lon"] = float(new_lon)
+
+    return df
 
 # ------------------------------------------------------------------------------
 # 4) LAYOUT
 # ------------------------------------------------------------------------------
+
 if data_load_success:
-    # business UI options
-    biz_options = [{"label": "All Businesses", "value": "All"}]
-    biz_disabled = business_df is None or business_df.empty
-    if not biz_disabled:
-        biz_options += [{"label": b, "value": b} for b in sorted(business_df["business_label"].dropna().unique())]
+    default_region_key = initial_region_data["key"]
+    region_options = [
+        {"label": spec["label"], "value": key}
+        for key, spec in REGION_SPECS.items()
+    ]
+
+    market_types_initial = sorted(initial_region_data.get("market_types") or [])
+    initial_market_options = (
+        [{"label": "All Markets", "value": "All Markets"}]
+        + [{"label": m, "value": m} for m in market_types_initial]
+    )
+
+    business_types_initial = sorted(initial_region_data.get("business_types") or [])
+    biz_options = (
+        [{"label": "All Businesses", "value": "All"}]
+        + [{"label": b, "value": b} for b in business_types_initial]
+        if business_types_initial
+        else [{"label": "All Businesses", "value": "All"}]
+    )
+    biz_disabled = not business_types_initial
+
+    trader_types_initial = sorted(initial_region_data.get("trader_types") or [])
+    trader_options = (
+        [{"label": "All Traders", "value": "All"}]
+        + [{"label": t, "value": t} for t in trader_types_initial]
+    )
+
+    time_periods_initial = list(initial_region_data.get("time_periods") or ["Now"])
+    time_marks_initial = {idx: label for idx, label in enumerate(time_periods_initial)}
+    time_max_initial = max(len(time_periods_initial) - 1, 0)
+    time_default_value = time_max_initial
+    time_period_note = (
+        "" if len(time_periods_initial) == 3 else "Note: mid-point (5 Yrs Ago) data not available for this region."
+    )
+
+    region_info_text = f"Dataset: {initial_region_data['label']} ({initial_region_data['market_count']} markets)"
+
+    hero_section = html.Div(
+        className="app-hero",
+        children=[
+            html.H1("INCATA Market Analysis Dashboard"),
+            html.H4("Markets studied under Project INCATA"),
+            html.P(
+                "INCATA: Linked Farms and Enterprises for Inclusive Agricultural Transformation in Africa and Asia",
+                className="muted",
+                style={"textAlign": "center", "marginTop": "2px"},
+            ),
+        ],
+        style={"marginBottom": "28px"},
+    )
+
+    region_selector_children = [
+        html.Div(
+            children=[
+                html.Label(
+                    "Choose Dataset Region",
+                    style={"fontWeight": "bold", "color": "#495057", "marginBottom": "8px"},
+                ),
+                dcc.RadioItems(
+                    id="region-selector",
+                    options=region_options,
+                    value=default_region_key,
+                    inline=False,
+                    labelStyle={"display": "block", "marginBottom": "6px", "fontSize": "13px"},
+                    style={"marginTop": "6px"},
+                ),
+                dcc.Loading(
+                    id="region-loading",
+                    type="dot",
+                    style={"marginTop": "6px"},
+                    children=html.Div(id="region-loading-sentinel", style={"width": 1, "height": 1}),
+                ),
+            ],
+        ),
+    ]
+
+    region_controls_children = [
+        html.Hr(style={"border": "0", "borderTop": "1px solid #ced4da", "margin": "4px 0 12px"}),
+        html.Label(
+            "Global Filter: Select Market Type",
+            style={"fontWeight": "bold", "display": "block", "color": "#495057", "marginBottom": "8px"},
+        ),
+        dcc.Dropdown(
+            id="master-market-type-filter",
+            className="lifted-dropdown",
+            options=initial_market_options,
+            value="All Markets",
+        ),
+        html.Div(
+            time_period_note,
+            id="time-period-note",
+            className="muted",
+            style={"fontSize": "11px", "marginTop": "8px"},
+        ),
+    ]
+
+    region_controls_card = html.Div(
+        style={
+            "background-color": "#e2e3e5",
+            "padding": "16px",
+            "border-radius": "10px",
+            "margin-bottom": "46px",
+        },
+        children=region_controls_children,
+    )
+
+    region_floating_panel = html.Div(
+        id={"type": "floating-panel-wrapper", "index": "region"},
+        className="floating-controls region-controls",
+        children=[
+            html.Div(
+                id={"type": "panel-header", "index": "region"},
+                className="control-panel-header",
+                n_clicks=0,
+                children=[
+                    html.Span("🌍", className="header-icon"),
+                    html.Span("Dataset Region", className="header-text"),
+                    html.Button("-", id="region-toggle-controls-btn", className="toggle-btn"),
+                ],
+            ),
+            html.Div(
+                id={"type": "panel-content", "index": "region"},
+                className="controls-content",
+                children=region_selector_children,
+            ),
+        ],
+    )
+
+    biz_controls_base_style = BIZ_CONTROLS_BASE_STYLE.copy()
+
+    network_controls_children = [
+        html.Div(
+            style={"marginBottom": "16px"},
+            children=[
+                html.Label(
+                    "Time Period",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"},
+                ),
+                dcc.Slider(
+                    id="network-time-slider",
+                    min=0,
+                    max=time_max_initial,
+                    step=None,
+                    included=False,
+                    value=time_default_value,
+                    marks=time_marks_initial,
+                ),
+            ],
+        ),
+        html.Div(
+            id="network-time-note",
+            className="muted",
+            style={"fontSize": "11px", "marginTop": "-10px", "marginBottom": "12px"},
+        ),
+        html.Div(
+            style={"marginBottom": "16px"},
+            children=[
+                html.Label(
+                    "Season",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"},
+                ),
+                dcc.RadioItems(
+                    id="season-toggle",
+                    options=[
+                        {"label": "High Season", "value": "High Season"},
+                        {"label": "Low Season", "value": "Low Season"},
+                    ],
+                    value="High Season",
+                    labelStyle={"display": "block", "marginBottom": "5px", "fontSize": "12px"},
+                ),
+            ],
+        ),
+        html.Div(
+            style={"marginBottom": "16px"},
+            children=[
+                html.Label(
+                    "Map Layers",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"},
+                ),
+                dcc.Checklist(
+                    id="layer-toggles",
+                    options=[
+                        {"label": " Markets & Origins", "value": "show_markers"},
+                        {"label": " Roads", "value": "show_roads"},
+                        {"label": " Nightlights", "value": "show_nightlights"},
+                    ],
+                    value=["show_markers"],
+                    labelStyle={"display": "block", "marginBottom": "5px", "fontSize": "12px"},
+                ),
+            ],
+        ),
+        html.Div(
+            style={"marginBottom": "12px"},
+            children=[
+                html.Label(
+                    "Trade Routes",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"},
+                ),
+                dcc.Checklist(
+                    id="toggle-routes",
+                    options=[{"label": " Show Trade Routes", "value": "show"}],
+                    value=["show"],
+                    labelStyle={"fontSize": "12px", "marginBottom": "8px"},
+                ),
+                html.Div(
+                    style={"display": "flex", "alignItems": "center", "gap": "10px", "marginTop": "10px"},
+                    children=[
+                        html.Label("Opacity:", style={"fontSize": "12px", "minWidth": "50px"}),
+                        dcc.Dropdown(
+                            id="opacity-dropdown",
+                            className="lifted-dropdown",
+                            options=[{"label": f"{i}%", "value": i} for i in range(0, 101, 10)],
+                            value=70,
+                            clearable=False,
+                            searchable=False,
+                            style={"width": "80px", "fontSize": "11px"},
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        html.Div(
+            style={"marginBottom": "14px"},
+            children=[
+                html.Button(
+                    "Simplify Map: Off",
+                    id="simplify-map-btn",
+                    n_clicks=0,
+                    style={
+                        "width": "100%",
+                        "cursor": "pointer",
+                        "border": "1px solid #004085",
+                        "backgroundColor": "#f8f9fa",
+                        "padding": "7px 10px",
+                        "borderRadius": "6px",
+                        "fontSize": "12px",
+                        "color": "#004085",
+                        "fontWeight": "600",
+                    },
+                )
+            ],
+        ),
+        html.Div(
+            style={"borderTop": "1px solid #e0e0e0", "paddingTop": "10px", "marginTop": "10px"},
+            children=[
+                html.Button(
+                    "How to Read This Map",
+                    id="network-info-button",
+                    n_clicks=0,
+                    style={
+                        "width": "100%",
+                        "cursor": "pointer",
+                        "border": "1px solid #004085",
+                        "backgroundColor": "#e7f3ff",
+                        "padding": "6px 10px",
+                        "borderRadius": "6px",
+                        "fontSize": "12px",
+                    },
+                )
+            ],
+        ),
+        html.Div(
+            id="biz-controls-wrapper",
+            style=biz_controls_base_style,
+            children=[
+                html.Label(
+                    "Businesses",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"},
+                ),
+                dcc.Checklist(
+                    id="biz-toggle",
+                    options=[{"label": " Show Businesses", "value": "show"}],
+                    value=[],
+                    labelStyle={"fontSize": "12px", "marginBottom": "8px"},
+                ),
+                dcc.Dropdown(
+                    id="biz-type-dropdown",
+                    className="lifted-dropdown",
+                    options=biz_options,
+                    value="All",
+                    clearable=False,
+                    placeholder="Select business type",
+                    disabled=biz_disabled,
+                ),
+                html.Div(style={"height": "8px"}),
+                dcc.RadioItems(
+                    id="biz-view-mode",
+                    options=[
+                        {"label": " Points", "value": "points"},
+                        {"label": " Heatmap", "value": "heatmap"},
+                    ],
+                    value="points",
+                    inline=True,
+                ),
+                html.Div(style={"height": "8px"}),
+                html.Label("Opacity", style={"fontSize": "12px"}),
+                dcc.Slider(
+                    id="biz-opacity",
+                    min=10,
+                    max=100,
+                    step=5,
+                    value=70,
+                    marks={10: "10%", 70: "70%", 100: "100%"},
+                ),
+            ],
+        ),
+    ]
+
+    network_floating_panel = html.Div(
+        id={"type": "floating-panel-wrapper", "index": "network"},
+        className="floating-controls network-controls",
+        children=[
+            html.Div(
+                id={"type": "panel-header", "index": "network"},
+                className="control-panel-header",
+                n_clicks=0,
+                children=[
+                    html.Span("⚙️", className="header-icon"),
+                    html.Span("Map Controls", className="header-text"),
+                    html.Button("-", id="network-toggle-controls-btn", className="toggle-btn"),
+                ],
+            ),
+            html.Div(
+                id={"type": "panel-content", "index": "network"},
+                className="controls-content",
+                children=network_controls_children,
+            ),
+        ],
+    )
+
+    floating_controls_wrapper = html.Div(
+        className="floating-panel-container",
+        children=[
+            network_floating_panel,
+            region_floating_panel,
+        ],
+    )
+
+    network_title = html.Div(
+        className="title-wrap",
+        children=[
+            html.Div(id="network-map-title", className="title-chip"),
+            html.Div(
+                className="title-spinner",
+                children=dcc.Loading(
+                    id="network-loading",
+                    type="dot",
+                    children=html.Div(id="network-loading-sentinel", style={"width": 1, "height": 1}),
+                ),
+            ),
+        ],
+    )
+
+    network_info_bubble = html.Div(
+        id="network-info-collapse",
+        style={
+            "display": "none",
+            "position": "absolute",
+            "bottom": "10px",
+            "right": "10px",
+            "background-color": "rgba(248, 249, 250, 0.95)",
+            "padding": "15px",
+            "border": "1px dashed #cce5ff",
+            "borderRadius": "6px",
+            "zIndex": "998",
+            "maxWidth": "420px",
+        },
+        children=[
+            html.Button(
+                "Panel",
+                id="close-info-btn",
+                n_clicks=0,
+                style={
+                    "position": "absolute",
+                    "top": "6px",
+                    "right": "10px",
+                    "background": "transparent",
+                    "border": "none",
+                    "fontSize": "12px",
+                    "cursor": "pointer",
+                },
+            ),
+            dcc.Markdown(
+                """* **Red Dots (Produce Origins):** County/area where tomatoes are sourced.
+* **Blue Dots (Markets):** Markets where tomatoes are sold.
+* **Lines (Trade Routes):** Connections from origin to market.
+* **Line Thickness:** Represents the share of produce from that origin.
+* **Business Halos (optional):** Circle size shows number of businesses; color shows nearest distance (km).""",
+                style={"fontSize": "12px", "margin": "0"},
+            ),
+        ],
+    )
+
+    network_map_wrapper = html.Div(
+        style={"position": "relative", "width": "100%"},
+        children=[
+            floating_controls_wrapper,
+            network_title,
+            dcc.Graph(id="network-map", style={"height": "85vh", "width": "100%"}, config=GRAPH_CONFIG),
+            html.Div(id="business-legend", className="map-floating-legend"),
+            network_info_bubble,
+        ],
+    )
+
+    network_section = html.Div(
+        className="section-card",
+        children=[
+            html.H2(
+                "Produce Flow Network",
+                style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"},
+            ),
+            html.P(
+                "Map shows produce flows from origins to markets. In Kenya the focus is tomatoes; in Odisha the focus is vegetables.",
+                style={"marginBottom": "16px"},
+            ),
+            network_map_wrapper,
+        ],
+    )
+
+    combined_controls_children = [
+        html.Div(
+            style={"marginBottom": "18px"},
+            children=[
+                html.Label(
+                    "Analysis Type",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"},
+                ),
+                dcc.RadioItems(
+                    id="data-type-toggle",
+                    options=[
+                        {"label": " Tomatoes", "value": "tomatoes"},
+                        {"label": " Traders", "value": "traders"},
+                    ],
+                    value="tomatoes",
+                    inline=True,
+                    labelStyle={"marginRight": "14px"},
+                ),
+            ],
+        ),
+        html.Div(
+            style={"marginBottom": "18px"},
+            children=[
+                html.Label(
+                    "View Style",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"},
+                ),
+                dcc.RadioItems(
+                    id="view-type-toggle",
+                    options=[
+                        {"label": " Points", "value": "points"},
+                        {"label": " Heatmap", "value": "heatmap"},
+                    ],
+                    value="points",
+                    inline=True,
+                    labelStyle={"marginRight": "14px"},
+                ),
+            ],
+        ),
+        html.Div(
+            id="season-control-div",
+            className="conditional-control",
+            style={"marginBottom": "18px"},
+            children=[
+                html.Label(
+                    "Season",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"},
+                ),
+                dcc.RadioItems(
+                    id="combined-season-toggle",
+                    options=[
+                        {"label": "High", "value": "High Season"},
+                        {"label": "Low", "value": "Low Season"},
+                    ],
+                    value="High Season",
+                    inline=True,
+                ),
+            ],
+        ),
+        html.Div(
+            id="trader-control-div",
+            className="conditional-control",
+            style={"marginBottom": "18px"},
+            children=[
+                html.Label(
+                    "Trader Type",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"},
+                ),
+                dcc.Dropdown(
+                    id="combined-trader-type-dropdown",
+                    className="lifted-dropdown",
+                    options=trader_options,
+                    value="All",
+                    placeholder="Select...",
+                ),
+            ],
+        ),
+        html.Div(
+            style={"marginBottom": "6px"},
+            children=[
+                html.Label(
+                    "Time Period",
+                    style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"},
+                ),
+                dcc.Slider(
+                    id="combined-time-slider",
+                    min=0,
+                    max=time_max_initial,
+                    step=None,
+                    included=False,
+                    value=time_default_value,
+                    marks=time_marks_initial,
+                ),
+            ],
+        ),
+    ]
+
+    combined_floating_panel = html.Div(
+        id={"type": "floating-panel-wrapper", "index": "combined"},
+        className="floating-controls",
+        children=[
+            html.Div(
+                id={"type": "panel-header", "index": "combined"},
+                className="control-panel-header",
+                n_clicks=0,
+                children=[
+                    html.Span("⚙️", className="header-icon"),
+                    html.Span("Analysis Controls", className="header-text"),
+                    html.Button("-", id="combined-toggle-controls-btn", className="toggle-btn"),
+                ],
+            ),
+            html.Div(
+                id={"type": "panel-content", "index": "combined"},
+                className="controls-content",
+                children=combined_controls_children,
+            ),
+        ],
+    )
+
+    combined_title = html.Div(
+        className="title-wrap",
+        children=[
+            html.Div(id="combined-map-title", className="title-chip"),
+            html.Div(
+                className="title-spinner",
+                children=dcc.Loading(
+                    id="combined-loading",
+                    type="dot",
+                    children=html.Div(id="combined-loading-sentinel", style={"width": 1, "height": 1}),
+                ),
+            ),
+        ],
+    )
+
+    combined_map_wrapper = html.Div(
+        style={"position": "relative", "width": "100%"},
+        children=[
+            combined_floating_panel,
+            combined_title,
+            dcc.Graph(id="combined-map", style={"height": "85vh"}, config=GRAPH_CONFIG),
+        ],
+    )
+
+    combined_section = html.Div(
+        className="section-card",
+        children=[
+            html.H2(
+                "Market Concentration Analysis",
+                style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"},
+            ),
+            html.P(
+                "Analyze tomato trade volume or trader concentration. Switch type and view to explore patterns.",
+                style={"marginBottom": "20px"},
+            ),
+            combined_map_wrapper,
+        ],
+    )
+
+    footer_section = html.Footer(
+        [
+            html.P(
+                "The INCATA project is funded by the Gates Foundation.",
+                className="muted",
+                style={"fontSize": "0.9em"},
+            ),
+        ],
+        style={"textAlign": "center", "padding": "18px 0", "marginTop": "24px", "borderTop": "1px solid #dee2e6"},
+    )
 
     app.layout = html.Div(
         style={"padding": "2% 5%"},
         children=[
-            # HERO
-            html.Div(
-                className="app-hero",
-                children=[
-                    html.H1("INCATA Market Analysis Dashboard"),
-                    html.H4("Markets studied under Project INCATA"),
-                    html.P(
-                        "INCATA: Linked Farms and Enterprises for Inclusive Agricultural Transformation in Africa and Asia",
-                        className="muted",
-                        style={"textAlign": "center", "marginTop": "2px"},
-                    ),
-                ],
-                style={"marginBottom": "28px"},
-            ),
-
-            # GLOBAL FILTER
-            html.Div(
-                style={
-                    "background-color": "#e2e3e5",
-                    "padding": "14px",
-                    "border-radius": "10px",
-                    "margin-bottom": "46px",
-                },
-                children=[
-                    html.Label(
-                        "Global Filter: Select Market Type",
-                        style={"fontWeight": "bold", "display": "block", "color": "#495057", "marginBottom": "8px"},
-                    ),
-                    dcc.Dropdown(
-                        id="master-market-type-filter",
-                        className="lifted-dropdown",
-                        options=[{"label": "All Markets", "value": "All Markets"}]
-                        + [{"label": m, "value": m} for m in sorted(network_df["mkt_type"].dropna().unique())],
-                        value="All Markets",
-                    ),
-                ],
-            ),
-
-            # PRODUCE FLOW NETWORK MAP
-            html.Div(
-                className="section-card",
-                children=[
-                    html.H2("Produce Flow Network", style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"}),
-                    html.P("Map shows tomato flows from origins to markets. Origins (red) are approximate locations (often county-level centroids).", style={"marginBottom": "16px"}),
-                    html.Div(
-                        style={"position": "relative", "width": "100%"},
-                        children=[
-                            # Floating controls
-                            html.Div(
-                                id={"type": "floating-panel-wrapper", "index": "network"},
-                                className="floating-controls",
-                                children=[
-                                    html.Div(
-                                        id={"type": "panel-header", "index": "network"},
-                                        className="control-panel-header",
-                                        n_clicks=0,
-                                        children=[
-                                            html.Span("⚙️", className="header-icon"),
-                                            html.Span("Map Controls", className="header-text"),
-                                            html.Button("−", id="network-toggle-controls-btn", className="toggle-btn"),
-                                        ],
-                                    ),
-                                    html.Div(
-                                        id={"type": "panel-content", "index": "network"},
-                                        className="controls-content",
-                                        children=[
-                                            # TIME + SEASON
-                                            html.Div(
-                                                style={"marginBottom": "16px"},
-                                                children=[
-                                                    html.Label("📅 Time Period", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Slider(id="network-time-slider", min=0, max=2, step=None, included=False, value=2,
-                                                               marks={0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                style={"marginBottom": "16px"},
-                                                children=[
-                                                    html.Label("🌱 Season", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.RadioItems(
-                                                        id="season-toggle",
-                                                        options=[{"label": " High Season", "value": "High Season"}, {"label": " Low Season", "value": "Low Season"}],
-                                                        value="High Season",
-                                                        labelStyle={"display": "block", "marginBottom": "5px", "fontSize": "12px"},
-                                                    ),
-                                                ],
-                                            ),
-                                            # LAYERS
-                                            html.Div(
-                                                style={"marginBottom": "16px"},
-                                                children=[
-                                                    html.Label("🗺 Map Layers", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Checklist(
-                                                        id="layer-toggles",
-                                                        options=[
-                                                            {"label": " Markets & Origins", "value": "show_markers"},
-                                                            {"label": " Roads", "value": "show_roads"},
-                                                            {"label": " Nightlights", "value": "show_nightlights"},
-                                                        ],
-                                                        value=["show_markers"],
-                                                        labelStyle={"display": "block", "marginBottom": "5px", "fontSize": "12px"},
-                                                    ),
-                                                ],
-                                            ),
-                                            # ROUTES
-                                            html.Div(
-                                                style={"marginBottom": "12px"},
-                                                children=[
-                                                    html.Label("🔗 Trade Routes", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Checklist(id="toggle-routes", options=[{"label": " Show Trade Routes", "value": "show"}],
-                                                                  value=["show"], labelStyle={"fontSize": "12px", "marginBottom": "8px"}),
-                                                    html.Div(
-                                                        style={"display": "flex", "alignItems": "center", "gap": "10px", "marginTop": "10px"},
-                                                        children=[
-                                                            html.Label("Opacity:", style={"fontSize": "12px", "minWidth": "50px"}),
-                                                            dcc.Dropdown(
-                                                                id="opacity-dropdown", className="lifted-dropdown",
-                                                                options=[{"label": f"{i}%", "value": i} for i in range(0, 101, 10)],
-                                                                value=70, clearable=False, searchable=False, style={"width": "80px", "fontSize": "11px"},
-                                                            ),
-                                                        ],
-                                                    ),
-                                                ],
-                                            ),
-                                            # SIMPLIFY BUTTON
-                                            html.Div(
-                                                style={"marginBottom": "14px"},
-                                                children=[
-                                                    html.Button(
-                                                        "Simplify Map: Off",
-                                                        id="simplify-map-btn",
-                                                        n_clicks=0,
-                                                        style={
-                                                            "width": "100%",
-                                                            "cursor": "pointer",
-                                                            "border": "1px solid #004085",
-                                                            "backgroundColor": "#f8f9fa",
-                                                            "padding": "7px 10px",
-                                                            "borderRadius": "6px",
-                                                            "fontSize": "12px",
-                                                            "color": "#004085",
-                                                            "fontWeight": "600",
-                                                        },
-                                                    )
-                                                ],
-                                            ),
-                                            # INFO BUTTON
-                                            html.Div(
-                                                style={"borderTop": "1px solid #e0e0e0", "paddingTop": "10px", "marginTop": "10px"},
-                                                children=[html.Button("ℹ How to Read This Map", id="network-info-button", n_clicks=0,
-                                                                      style={"width": "100%", "cursor": "pointer", "border": "1px solid #004085",
-                                                                             "backgroundColor": "#e7f3ff", "padding": "6px 10px", "borderRadius": "6px", "fontSize": "12px"})],
-                                            ),
-                                            # --- NEW: BUSINESSES LAYER ---
-                                            html.Div(
-                                                style={"borderTop": "1px solid #e0e0e0", "marginTop": "14px", "paddingTop": "12px"},
-                                                children=[
-                                                    html.Label("🏬 Businesses", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
-                                                    dcc.Checklist(
-                                                        id="biz-toggle",
-                                                        options=[{"label": " Show Businesses", "value": "show"}],
-                                                        value=[],  # off by default to keep the map clean
-                                                        labelStyle={"fontSize": "12px", "marginBottom": "8px"},
-                                                    ),
-                                                    dcc.Dropdown(
-                                                        id="biz-type-dropdown", className="lifted-dropdown",
-                                                        options=biz_options, value="All", clearable=False,
-                                                        placeholder="Select business type", disabled=biz_disabled,
-                                                    ),
-                                                    html.Div(style={"height": "8px"}),
-                                                    dcc.RadioItems(
-                                                        id="biz-view-mode",
-                                                        options=[{"label": " Points", "value": "points"}, {"label": " Heatmap", "value": "heatmap"}],
-                                                        value="points", inline=True,
-                                                    ),
-                                                    html.Div(style={"height": "8px"}),
-                                                    html.Label("Opacity", style={"fontSize": "12px"}),
-                                                    dcc.Slider(id="biz-opacity", min=10, max=100, step=5, value=70,
-                                                               marks={10: "10%", 70: "70%", 100: "100%"}),
-                                                    html.Div(className="muted", style={"fontSize": "11px", "marginTop": "6px"},
-                                                             children="Size = number of businesses (by selected time). Color = nearest distance (km)."),
-                                                ],
-                                            ),
-                                        ],
-                                    ),
-                                ],
-                            ),
-
-                            # Centered title + tiny spinner
-                            html.Div(
-                                className="title-wrap",
-                                children=[
-                                    html.Div(id="network-map-title", className="title-chip"),
-                                    html.Div(
-                                        className="title-spinner",
-                                        children=dcc.Loading(
-                                            id="network-loading",
-                                            type="dot",
-                                            children=html.Div(id="network-loading-sentinel", style={"width": 1, "height": 1}),
-                                        ),
-                                    ),
-                                ],
-                            ),
-
-                            # Map
-                            dcc.Graph(id="network-map", style={"height": "85vh", "width": "100%"}, config=GRAPH_CONFIG),
-
-                            # Info bubble
-                            html.Div(
-                                id="network-info-collapse",
-                                style={"display": "none", "position": "absolute", "bottom": "10px", "right": "10px",
-                                       "background-color": "rgba(248, 249, 250, 0.95)", "padding": "15px",
-                                       "border": "1px dashed #cce5ff", "borderRadius": "6px", "zIndex": "998", "maxWidth": "420px"},
-                                children=[
-                                    html.Button("✕", id="close-info-btn", n_clicks=0,
-                                                style={"position": "absolute", "top": "6px", "right": "10px",
-                                                       "background": "transparent", "border": "none", "fontSize": "18px", "cursor": "pointer"}),
-                                    dcc.Markdown(
-                                        "* **Red Dots (Produce Origins):** County/area where tomatoes are sourced.\n"
-                                        "* **Blue Dots (Markets):** Markets where tomatoes are sold.\n"
-                                        "* **Lines (Trade Routes):** Connections from origin to market.\n"
-                                        "* **Line Thickness:** Represents the share of produce from that origin.\n"
-                                        "* **Business Halos (optional):** Circle size shows number of businesses; color shows nearest distance (km).",
-                                        style={"fontSize": "12px", "margin": "0"},
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                ],
-            ),
-
-            # MARKET CONCENTRATION / TRADERS (unchanged)
-            html.Div(
-                className="section-card",
-                children=[
-                    html.H2("Market Concentration Analysis", style={"color": "#004085", "border-bottom": "2px solid #b8daff", "padding-bottom": "10px"}),
-                    html.P("Analyze tomato trade volume or trader concentration. Switch type and view to explore patterns.", style={"marginBottom": "20px"}),
-
-                    html.Div(
-                        style={"position": "relative", "width": "100%"},
-                        children=[
-                            html.Div(
-                                id={"type": "floating-panel-wrapper", "index": "combined"},
-                                className="floating-controls",
-                                children=[
-                                    html.Div(
-                                        id={"type": "panel-header", "index": "combined"},
-                                        className="control-panel-header",
-                                        n_clicks=0,
-                                        children=[
-                                            html.Span("⚙️", className="header-icon"),
-                                            html.Span("Analysis Controls", className="header-text"),
-                                            html.Button("−", id="combined-toggle-controls-btn", className="toggle-btn"),
-                                        ],
-                                    ),
-                                    html.Div(
-                                        id={"type": "panel-content", "index": "combined"},
-                                        className="controls-content",
-                                        children=[
-                                            html.Div(
-                                                style={"marginBottom": "18px"},
-                                                children=[
-                                                    html.Label("📊 Analysis Type", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
-                                                    dcc.RadioItems(
-                                                        id="data-type-toggle",
-                                                        options=[{"label": " Tomatoes", "value": "tomatoes"}, {"label": " Traders", "value": "traders"}],
-                                                        value="tomatoes", inline=True, labelStyle={"marginRight": "14px"},
-                                                    ),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                style={"marginBottom": "18px"},
-                                                children=[
-                                                    html.Label("🎨 View Style", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
-                                                    dcc.RadioItems(
-                                                        id="view-type-toggle",
-                                                        options=[{"label": " Points", "value": "points"}, {"label": " Heatmap", "value": "heatmap"}],
-                                                        value="points", inline=True, labelStyle={"marginRight": "14px"},
-                                                    ),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                id="season-control-div", className="conditional-control", style={"marginBottom": "18px"},
-                                                children=[
-                                                    html.Label("🌱 Season", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
-                                                    dcc.RadioItems(
-                                                        id="combined-season-toggle",
-                                                        options=[{"label": " High", "value": "High Season"}, {"label": " Low", "value": "Low Season"}],
-                                                        value="High Season", inline=True,
-                                                    ),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                id="trader-control-div", className="conditional-control", style={"marginBottom": "18px"},
-                                                children=[
-                                                    html.Label("👤 Trader Type", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "8px"}),
-                                                    dcc.Dropdown(
-                                                        id="combined-trader-type-dropdown", className="lifted-dropdown",
-                                                        options=[{"label": "All Traders", "value": "All"}] + [
-                                                            {"label": t, "value": t} for t in sorted(trader_df["trader_id"].dropna().unique())
-                                                        ],
-                                                        value="All", placeholder="Select...",
-                                                    ),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                style={"marginBottom": "6px"},
-                                                children=[
-                                                    html.Label("📅 Time Period", style={"fontWeight": "bold", "fontSize": "13px", "display": "block", "marginBottom": "6px"}),
-                                                    dcc.Slider(id="combined-time-slider", min=0, max=2, step=None, included=False, value=2,
-                                                               marks={0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}),
-                                                ],
-                                            ),
-                                        ],
-                                    ),
-                                ],
-                            ),
-
-                            html.Div(
-                                className="title-wrap",
-                                children=[
-                                    html.Div(id="combined-map-title", className="title-chip"),
-                                    html.Div(
-                                        className="title-spinner",
-                                        children=dcc.Loading(
-                                            id="combined-loading",
-                                            type="dot",
-                                            children=html.Div(id="combined-loading-sentinel", style={"width": 1, "height": 1}),
-                                        ),
-                                    ),
-                                ],
-                            ),
-
-                            dcc.Graph(id="combined-map", style={"height": "85vh"}, config=GRAPH_CONFIG),
-                        ],
-                    ),
-                ],
-            ),
-
-            # FOOTER
-            html.Footer(
-                [
-                    html.P(
-                        "The INCATA project is funded by the Gates Foundation.",
-                        className="muted",
-                        style={"fontSize": "0.9em"},
-                    ),
-                ],
-                style={"textAlign": "center", "padding": "18px 0", "marginTop": "24px", "borderTop": "1px solid #dee2e6"},
-            ),
+            hero_section,
+            region_controls_card,
+            network_section,
+            combined_section,
+            footer_section,
         ],
     )
 
 # ------------------------------------------------------------------------------
 # 5) CALLBACKS
 # ------------------------------------------------------------------------------
-if data_load_success:
-
-    @app.callback(
-        [Output({"type": "floating-panel-wrapper", "index": MATCH}, "className"),
-         Output({"type": "panel-content", "index": MATCH}, "className")],
-        Input({"type": "panel-header", "index": MATCH}, "n_clicks"),
-        State({"type": "floating-panel-wrapper", "index": MATCH}, "className"),
-        prevent_initial_call=True,
-    )
-    def toggle_panel_animation(n, current_class):
-        if n and n > 0:
-            if current_class and "icon-only" in current_class:
-                return "floating-controls", "controls-content"
-            else:
-                return "floating-controls icon-only", "controls-content hidden"
+@app.callback(
+    [Output({"type": "floating-panel-wrapper", "index": MATCH}, "className"),
+     Output({"type": "panel-content", "index": MATCH}, "className")],
+    Input({"type": "panel-header", "index": MATCH}, "n_clicks"),
+    State({"type": "floating-panel-wrapper", "index": MATCH}, "className"),
+    prevent_initial_call=True,
+)
+def toggle_panel_animation(n, current_class):
+    if not n or n <= 0:
         return no_update, no_update
 
-    @app.callback(
-        Output("network-info-collapse", "style"),
-        [Input("network-info-button", "n_clicks"), Input("close-info-btn", "n_clicks")],
-        State("network-info-collapse", "style"),
-        prevent_initial_call=True,
-    )
-    def toggle_network_info(info_clicks, close_clicks, current_style):
-        ctx = callback_context
-        if not ctx.triggered:
-            return current_style
-        button_id = ctx.triggered[0]["prop_id"].split(".")[0]
-        if button_id == "network-info-button" and (not current_style or current_style.get("display") == "none"):
-            base = current_style.copy() if current_style else {}
-            base.update({"display": "block", "animation": "fadeIn 0.3s"})
-            return base
+    tokens = (current_class or "").split()
+    base_tokens = [token for token in tokens if token not in {"floating-controls", "icon-only"}]
+
+    if "icon-only" in tokens:
+        new_class = " ".join(["floating-controls"] + base_tokens) or "floating-controls"
+        return new_class, "controls-content"
+
+    new_class = " ".join(["floating-controls"] + base_tokens + ["icon-only"])
+    return new_class, "controls-content hidden"
+
+
+@app.callback(
+    Output("network-info-collapse", "style"),
+    [Input("network-info-button", "n_clicks"), Input("close-info-btn", "n_clicks")],
+    State("network-info-collapse", "style"),
+    prevent_initial_call=True,
+)
+def toggle_network_info(info_clicks, close_clicks, current_style):
+    ctx = callback_context
+    if not ctx.triggered:
+        return current_style
+    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    if button_id == "network-info-button" and (not current_style or current_style.get("display") == "none"):
         base = current_style.copy() if current_style else {}
-        base.update({"display": "none"})
+        base.update({"display": "block", "animation": "fadeIn 0.3s"})
         return base
+    base = current_style.copy() if current_style else {}
+    base.update({"display": "none"})
+    return base
+
+
+@app.callback(
+    [
+        Output("region-loading-sentinel", "children"),
+        Output("master-market-type-filter", "options"),
+        Output("master-market-type-filter", "value"),
+        Output("biz-type-dropdown", "options"),
+        Output("biz-type-dropdown", "value"),
+        Output("biz-type-dropdown", "disabled"),
+        Output("biz-controls-wrapper", "style"),
+        Output("combined-trader-type-dropdown", "options"),
+        Output("combined-trader-type-dropdown", "value"),
+        Output("network-time-slider", "marks"),
+        Output("network-time-slider", "max"),
+        Output("network-time-slider", "value"),
+        Output("combined-time-slider", "marks"),
+        Output("combined-time-slider", "max"),
+        Output("combined-time-slider", "value"),
+        Output("time-period-note", "children"),
+        Output("network-time-note", "children"),
+        Output("data-type-toggle", "options"),
+        Output("data-type-toggle", "value"),
+    ],
+    Input("region-selector", "value"),
+    State("master-market-type-filter", "value"),
+    State("biz-type-dropdown", "value"),
+    State("combined-trader-type-dropdown", "value"),
+    State("network-time-slider", "value"),
+    State("combined-time-slider", "value"),
+    State("network-time-slider", "marks"),
+    State("combined-time-slider", "marks"),
+    State("data-type-toggle", "value"),
+)
+def refresh_region_controls(
+    region_key,
+    current_market,
+    current_biz,
+    current_trader,
+    current_network_time,
+    current_combined_time,
+    network_marks_state,
+    combined_marks_state,
+    current_data_type,
+):
+    region_data = load_region_data(region_key)
+
+    market_types = sorted(region_data.get("market_types") or [])
+    market_options = (
+        [{"label": "All Markets", "value": "All Markets"}]
+        + [{"label": m, "value": m} for m in market_types]
+    )
+    market_values = {opt["value"] for opt in market_options}
+    market_value = current_market if current_market in market_values else "All Markets"
+
+    business_types = sorted(region_data.get("business_types") or [])
+    biz_disabled = not business_types
+    biz_options = (
+        [{"label": "All Businesses", "value": "All"}]
+        + [{"label": b, "value": b} for b in business_types]
+        if business_types
+        else [{"label": "All Businesses", "value": "All"}]
+    )
+    biz_values = {opt["value"] for opt in biz_options}
+    biz_value = current_biz if current_biz in biz_values else "All"
+    if business_types:
+        biz_controls_style = BIZ_CONTROLS_BASE_STYLE.copy()
+    else:
+        hidden_style = BIZ_CONTROLS_BASE_STYLE.copy()
+        hidden_style["display"] = "none"
+        biz_controls_style = hidden_style
+
+    trader_types = sorted(region_data.get("trader_types") or [])
+    trader_options = (
+        [{"label": "All Traders", "value": "All"}]
+        + [{"label": t, "value": t} for t in trader_types]
+    )
+    trader_values = {opt["value"] for opt in trader_options}
+    trader_value = current_trader if current_trader in trader_values else "All"
+
+    periods = list(region_data.get("time_periods") or ["Now"])
+    marks = {idx: label for idx, label in enumerate(periods)}
+    max_idx = max(len(periods) - 1, 0)
+
+    def _extract_label(index, marks_dict):
+        if marks_dict is None or index is None:
+            return None
+        if isinstance(marks_dict, dict):
+            if index in marks_dict:
+                return marks_dict[index]
+            key_str = str(index)
+            if key_str in marks_dict:
+                return marks_dict[key_str]
+        return None
+
+    prev_network_label = _extract_label(current_network_time, network_marks_state)
+    prev_combined_label = _extract_label(current_combined_time, combined_marks_state)
+
+    if prev_network_label in periods:
+        network_value = periods.index(prev_network_label)
+    else:
+        network_value = max_idx
+
+    if prev_combined_label in periods:
+        combined_value = periods.index(prev_combined_label)
+    else:
+        combined_value = max_idx
+
+    note_text = "" if "5 Yrs Ago" in periods else "Note: mid-point (5 Yrs Ago) data not available for this region."
+    network_note = "" if not note_text else f"Available periods: {', '.join(periods)}"
+
+    current_data_type = current_data_type or "tomatoes"
+    if region_data["key"] == "odisha":
+        data_type_options = [
+            {"label": " Traders", "value": "traders"},
+        ]
+        data_type_value = "traders"
+    else:
+        data_type_options = [
+            {"label": " Tomatoes", "value": "tomatoes"},
+            {"label": " Traders", "value": "traders"},
+        ]
+        data_type_value = current_data_type if current_data_type in {"tomatoes", "traders"} else "tomatoes"
+
+    return (
+        "",
+        market_options,
+        market_value,
+        biz_options,
+        biz_value,
+        biz_disabled,
+        biz_controls_style,
+        trader_options,
+        trader_value,
+        marks,
+        max_idx,
+        network_value,
+        marks,
+        max_idx,
+        combined_value,
+        note_text,
+        network_note,
+        data_type_options,
+        data_type_value,
+    )
+
 
 # --------------------------- NETWORK MAP -----------------------------------
-    @app.callback(
+@app.callback(
     [
         Output("network-map", "figure"),
         Output("network-map-title", "children"),
-        Output("network-loading-sentinel", "children"),  # drives the spinner
+        Output("network-loading-sentinel", "children"),
         Output("simplify-map-btn", "children"),
+        Output("business-legend", "children"),
+        Output("business-legend", "className"),
     ],
     [
+        Input("region-selector", "value"),
         Input("master-market-type-filter", "value"),
         Input("season-toggle", "value"),
         Input("network-time-slider", "value"),
         Input("opacity-dropdown", "value"),
         Input("toggle-routes", "value"),
         Input("layer-toggles", "value"),
+        Input("biz-toggle", "value"),
+        Input("biz-type-dropdown", "value"),
+        Input("biz-view-mode", "value"),
+        Input("biz-opacity", "value"),
         Input("simplify-map-btn", "n_clicks"),
-        # Businesses UI (ensure these exist in your layout)
-        Input("biz-toggle", "value"),            # checklist ['show'] or []
-        Input("biz-type-dropdown", "value"),     # 'All' or a specific business label
-        Input("biz-view-mode", "value"),         # 'points' or 'heatmap'
-        Input("biz-opacity", "value"),           # 10..100 slider
     ],
     [State("network-map", "relayoutData")],
-    )
-    def update_network_map(selected_market_type, selected_season, time_value, opacity_percent,
-                        toggle_value, layer_toggles, simplify_clicks, biz_toggle, biz_type, biz_view_mode, biz_opacity,
-                        relayout_data):
+)
+def update_network_map(
+    region_key,
+    selected_market_type,
+    selected_season,
+    time_value,
+    opacity_percent,
+    toggle_value,
+    layer_toggles,
+    biz_toggle,
+    biz_type,
+    biz_view_mode,
+    biz_opacity,
+    simplify_clicks,
+    relayout_data,
+):
+    region_data = load_region_data(region_key)
+    region_code = region_data.get("key", str(region_key).lower())
+    is_odisha = region_code == "odisha"
+    network_df = region_data["network_df"]
+    market_volume_df = region_data["market_volume_df"]
+    trader_df_local = region_data["trader_df"]
+    business_df_local = region_data.get("business_df")
+    roads_data = region_data.get("roads_data") or {}
+    nightlights_data = region_data.get("nightlights_data") or {}
+    time_periods = list(region_data.get("time_periods") or ["Now"])
 
-        # ---------------- selections / defaults ----------------
-        time_map = {0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}
-        selected_time = time_map.get(time_value, "Now")
-        layer_toggles = layer_toggles or []
-        if opacity_percent is None:
-            opacity_percent = 70
-        if biz_opacity is None:
-            biz_opacity = 70
-        show_businesses = bool(biz_toggle) and ("show" in biz_toggle)
-        biz_label_for_hover = biz_type if (biz_type and biz_type != "All") else "All businesses"
-        simplify_clicks = simplify_clicks or 0
-        simplify_mode = (simplify_clicks % 2 == 1)
-        simplify_label = "Simplify Map: On" if simplify_mode else "Simplify Map: Off"
+    try:
+        time_index = int(time_value)
+    except (TypeError, ValueError):
+        time_index = len(time_periods) - 1
+    if not time_periods:
+        time_periods = ["Now"]
+    time_index = max(0, min(time_index, len(time_periods) - 1))
+    selected_time = time_periods[time_index]
 
-        # ---------------- flows / volume slices ----------------
-        df_flow = network_df[(network_df["season"] == selected_season) & (network_df["Time Period"] == selected_time)]
-        if selected_market_type and selected_market_type != "All Markets":
-            df_flow = df_flow[df_flow["mkt_type"] == selected_market_type]
-        df_map = df_flow[df_flow["share"] > 0].copy()
+    layer_toggles = layer_toggles or []
+    if opacity_percent is None:
+        opacity_percent = 70
+    if biz_opacity is None:
+        biz_opacity = 70
+    show_businesses = bool(biz_toggle) and ("show" in biz_toggle)
+    biz_label_for_hover = biz_type if (biz_type and biz_type != "All") else "All businesses"
+    simplify_clicks = simplify_clicks or 0
+    simplify_mode = (simplify_clicks % 2 == 1)
+    simplify_label = "Simplify Map: On" if simplify_mode else "Simplify Map: Off"
+    quantity_label = "tons of vegetables" if is_odisha else "units per day"
+    legend_children = []
+    legend_class = "map-floating-legend"
 
-        df_vol = market_volume_df[(market_volume_df["season"] == selected_season) & (market_volume_df["Time Period"] == selected_time)]
-        if selected_market_type and selected_market_type != "All Markets":
-            df_vol = df_vol[df_vol["mkt_type"] == selected_market_type]
+    df_flow = network_df[
+        (network_df["season"] == selected_season)
+        & (network_df["Time Period"] == selected_time)
+    ]
+    if selected_market_type and selected_market_type != "All Markets":
+        df_flow = df_flow[df_flow["mkt_type"] == selected_market_type]
+    df_flow = df_flow.copy()
+    if {"mkt_id", "market_lat", "market_lon"}.issubset(df_flow.columns):
+        df_flow.loc[df_flow["mkt_id"] == 4004, ["market_lat", "market_lon"]] = BAZAR_SAHI_COORDS
+    if is_odisha:
+        df_flow = _reposition_odisha_origins(df_flow, region_data)
+    df_map = df_flow[df_flow["share"] > 0].copy()
 
-        # ---------------- basemap + layers ----------------
-        mapbox_style = MAPBOX_STYLE_DARK if "show_nightlights" in layer_toggles else MAPBOX_STYLE_LIGHT
-        layers = []
+    df_vol = market_volume_df[
+        (market_volume_df["season"] == selected_season)
+        & (market_volume_df["Time Period"] == selected_time)
+    ]
+    if selected_market_type and selected_market_type != "All Markets":
+        df_vol = df_vol[df_vol["mkt_type"] == selected_market_type]
+    if {"mkt_id", "lat", "lon"}.issubset(df_vol.columns):
+        df_vol.loc[df_vol["mkt_id"] == 4004, ["lat", "lon"]] = BAZAR_SAHI_COORDS
 
-        # Nightlights under everything
-        if "show_nightlights" in layer_toggles and nightlights_data:
-            try:
-                img, coords = _get_nl_image_and_coords(nightlights_data, selected_time)
-                if img:
-                    coords = coords or _default_bbox_coords()
-                    layers.append({
+    mapbox_style = MAPBOX_STYLE_DARK if "show_nightlights" in layer_toggles else MAPBOX_STYLE_LIGHT
+    layers = []
+
+    if "show_nightlights" in layer_toggles and nightlights_data:
+        try:
+            img, coords = _get_nl_image_and_coords(nightlights_data, selected_time, region_data)
+            if img:
+                coords = coords or _default_bbox_coords(region_data)
+                layers.append(
+                    {
                         "sourcetype": "image",
-                        "type": "raster",              # <- required for image in MapLibre
-                        "source": img,        # your base64 data URI
-                        "coordinates": coords,         # [[lonW,latN],[lonE,latN],[lonE,latS],[lonW,latS]]
+                        "type": "raster",
+                        "source": img,
+                        "coordinates": coords,
                         "opacity": 0.70,
-                        "below": "traces"              # keep it under your markers/lines
-                    })
-            except Exception as e:
-                print(f"ERROR: nightlights layer: {e}")
+                        "below": "traces",
+                    }
+                )
+        except Exception as exc:
+            print(f"ERROR: nightlights layer ({region_code}): {exc}")
 
-        # Roads above nightlights
-        if "show_roads" in layer_toggles and selected_time in roads_data:
-            road_color = "rgba(255,255,255,0.65)" if "show_nightlights" in layer_toggles else "rgba(40,40,40,0.95)"
-            road_width = 2.6 if "show_nightlights" in layer_toggles else 2.0
-            layers.append({
+    if "show_roads" in layer_toggles and selected_time in roads_data:
+        road_color = "rgba(255,255,255,0.65)" if "show_nightlights" in layer_toggles else "rgba(40,40,40,0.95)"
+        road_width = 1.82 if "show_nightlights" in layer_toggles else 1.4
+        layers.append(
+            {
                 "sourcetype": "geojson",
                 "source": roads_data[selected_time],
                 "type": "line",
                 "color": road_color,
                 "line": {"width": road_width},
-                "below": "traces"
-            })
+                "below": "traces",
+            }
+        )
 
-        # Preserve user pan/zoom
-        zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
-        if relayout_data and "map.center" in relayout_data:
-            zoom = relayout_data.get("map.zoom", zoom)
-            center = relayout_data.get("map.center", center)
+    defaults = region_data.get("map_defaults") or {"center": {"lat": 0.5, "lon": 37.5}, "zoom": 5.5}
+    zoom = defaults.get("zoom", 5.5)
+    center = defaults.get("center", {"lat": 0.5, "lon": 37.5})
 
-        fig = go.Figure()
+    triggered_props = {item["prop_id"].split(".")[0] for item in (callback_context.triggered or [])}
+    region_changed = "region-selector" in triggered_props
 
-        # ---------------- Businesses overlay + metrics for hover ----------------
-        # We'll also compute per-market business metrics to append to market hover text.
-        biz_metrics_for_hover = None
-        if show_businesses and (business_df is not None) and (not business_df.empty):
-            df_biz = business_df.copy()
-            if selected_market_type and selected_market_type != "All Markets":
-                df_biz = df_biz[df_biz["mkt_type"] == selected_market_type]
-            if biz_type and biz_type != "All":
-                df_biz = df_biz[df_biz["business_label"] == biz_type]
+    if relayout_data and "map.center" in relayout_data and not region_changed:
+        zoom = relayout_data.get("map.zoom", zoom)
+        center = relayout_data.get("map.center", center)
 
-            # Aggregate for overlay: total count at selected_time AND median km (valid distances only)
-            g = (df_biz.groupby(["mkt_id", "mkt_name", "mkt_type", "lat", "lon"], observed=True)
-                    .agg(
-                            count=(selected_time, "sum"),
-                            median_km=("nearest_km", lambda s: s.dropna().median())
+    fig = go.Figure()
+
+    biz_metrics_for_hover = None
+    if show_businesses and business_df_local is not None and selected_time in business_df_local.columns:
+        df_biz = business_df_local.copy()
+        if selected_market_type and selected_market_type != "All Markets" and "mkt_type" in df_biz.columns:
+            df_biz = df_biz[df_biz["mkt_type"] == selected_market_type]
+        if biz_type and biz_type != "All" and "business_label" in df_biz.columns:
+            df_biz = df_biz[df_biz["business_label"] == biz_type]
+        if {"mkt_id", "lat", "lon"}.issubset(df_biz.columns):
+            df_biz.loc[df_biz["mkt_id"] == 4004, ["lat", "lon"]] = BAZAR_SAHI_COORDS
+
+        g = (
+            df_biz.groupby(["mkt_id", "mkt_name", "mkt_type", "lat", "lon"], observed=True)
+            .agg(
+                count=(selected_time, "sum"),
+                median_km=("nearest_km", lambda s: s.dropna().median() if hasattr(s, "dropna") else pd.NA),
+            )
+            .reset_index()
+        )
+        g = g[g["count"] > 0]
+
+        if not g.empty:
+            biz_metrics_for_hover = g[["mkt_id", "count", "median_km"]].rename(
+                columns={"count": "biz_count", "median_km": "biz_median_km"}
+            )
+            legend_children = [
+                html.Div("Size = number of businesses (by selected time)."),
+                html.Div("Color = nearest distance (km)."),
+            ]
+            legend_class = "map-floating-legend visible"
+
+            q95 = g["count"].quantile(0.95) if len(g) > 1 else g["count"].max()
+            base = (q95 ** 0.5) if (pd.notna(q95) and q95 > 0) else 1.0
+            scale = 32.0 / base
+            g["size"] = 8 + (g["count"].clip(lower=0) ** 0.5) * scale
+            g["size"] = g["size"].clip(lower=8, upper=70)
+
+            if biz_view_mode == "heatmap":
+                fig.add_trace(
+                    go.Densitymap(
+                        lat=g["lat"],
+                        lon=g["lon"],
+                        z=g["count"],
+                        radius=34,
+                        colorscale="Turbo",
+                        colorbar=dict(title="Businesses"),
                     )
-                    .reset_index())
-            g = g[g["count"] > 0]
-
-            # This will be merged into the market markers for unified hover
-            biz_metrics_for_hover = g[["mkt_id", "count", "median_km"]].rename(columns={"count": "biz_count", "median_km": "biz_median_km"})
-
-            if not g.empty:
-                # Bigger, clearer halos
-                q95 = g["count"].quantile(0.95) if len(g) > 1 else g["count"].max()
-                base = (q95 ** 0.5) if (pd.notna(q95) and q95 > 0) else 1.0
-                scale = 32.0 / base  # exaggerated scale
-                g["size"] = 8 + (g["count"].clip(lower=0) ** 0.5) * scale
-                g["size"] = g["size"].clip(lower=8, upper=70)
-
-                if biz_view_mode == "heatmap":
-                    fig.add_trace(go.Densitymap(
-                        lat=g["lat"], lon=g["lon"], z=g["count"],
-                        radius=34, colorscale="Turbo",
-                        colorbar=dict(title="Businesses")
-                    ))
-                    # Empty markers just to stabilize hover if you ever want it
-                    fig.add_trace(go.Scattermap(
-                        lat=g["lat"], lon=g["lon"], mode="markers",
+                )
+                fig.add_trace(
+                    go.Scattermap(
+                        lat=g["lat"],
+                        lon=g["lon"],
+                        mode="markers",
                         marker=dict(size=10, color="rgba(0,0,0,0)"),
-                        hoverinfo="skip", showlegend=False
-                    ))
-                else:
-                    # Two white underlays → glow
-                    outer = (g["size"] + 12).clip(upper=80)
-                    inner = (g["size"] + 6).clip(upper=76)
-                    for sz, alpha in [(outer, 0.35), (inner, 0.90)]:
-                        fig.add_trace(go.Scattermap(
-                            lat=g["lat"], lon=g["lon"], mode="markers",
-                            marker=dict(size=sz, color=f"rgba(255,255,255,{alpha})", opacity=(biz_opacity/100.0)),
-                            hoverinfo="skip", showlegend=False
-                        ))
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+            else:
+                outer = (g["size"] + 12).clip(upper=80)
+                inner = (g["size"] + 6).clip(upper=76)
+                for sz, alpha in [(outer, 0.35), (inner, 0.90)]:
+                    fig.add_trace(
+                        go.Scattermap(
+                            lat=g["lat"],
+                            lon=g["lon"],
+                            mode="markers",
+                            marker=dict(size=sz, color=f"rgba(255,255,255,{alpha})", opacity=(biz_opacity / 100.0)),
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
+                    )
 
-                    # Main colored fill — color by median distance if we have any, else by count
-                    has_dist = g["median_km"].notna().any()
-                    color_values = g["median_km"] if has_dist else g["count"]
-                    cscale = "YlOrRd" if has_dist else "Blues"
-                    cmax = float(color_values.quantile(0.95)) if len(g) > 1 else None
-                    ctitle = "Median dist (km)" if has_dist else "Businesses"
+                has_dist = g["median_km"].notna().any()
+                color_values = g["median_km"] if has_dist else g["count"]
+                cscale = "YlOrRd" if has_dist else "Blues"
+                cmax = float(color_values.quantile(0.95)) if len(g) > 1 else None
+                ctitle = "Median dist (km)" if has_dist else "Businesses"
 
-                    fig.add_trace(go.Scattermap(
-                        lat=g["lat"], lon=g["lon"], mode="markers",
+                fig.add_trace(
+                    go.Scattermap(
+                        lat=g["lat"],
+                        lon=g["lon"],
+                        mode="markers",
                         marker=dict(
                             size=g["size"],
                             color=color_values,
-                            colorscale=cscale, cmin=0, cmax=cmax,
-                            opacity=(biz_opacity/100.0),
-                            showscale=True, colorbar=dict(title=ctitle),
+                            colorscale=cscale,
+                            cmin=0,
+                            cmax=cmax,
+                            opacity=(biz_opacity / 100.0),
+                            showscale=True,
+                            colorbar=dict(title=ctitle),
                         ),
                         name="Businesses",
-                        hoverinfo="skip",  # keep a single tooltip (on markets)
-                        showlegend=False
-                    ))
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
 
-        # ---------------- Build MARKET dots from a base union ----------------
-        # (so fish-only markets still appear as blue dots)
-        # From df_map (tomato flows)
-        mkts_from_flows = pd.DataFrame(columns=["mkt_id","mkt_name","mkt_type","lat","lon"])
+    mkts_from_flows = pd.DataFrame(columns=["mkt_id", "mkt_name", "mkt_type", "lat", "lon"])
+    if not df_map.empty:
+        mkts_from_flows = (
+            df_map[["mkt_id", "mkt_name", "mkt_type", "market_lat", "market_lon"]]
+            .drop_duplicates()
+            .rename(columns={"market_lat": "lat", "market_lon": "lon"})
+        )
+
+    mkts_from_volume = df_vol[["mkt_id", "mkt_name", "mkt_type", "lat", "lon"]].drop_duplicates()
+
+    mkts_from_business = pd.DataFrame(columns=["mkt_id", "mkt_name", "mkt_type", "lat", "lon"])
+    if business_df_local is not None:
+        mkts_from_business = business_df_local[["mkt_id", "mkt_name", "mkt_type", "lat", "lon"]].drop_duplicates()
+        if selected_market_type and selected_market_type != "All Markets" and "mkt_type" in mkts_from_business.columns:
+            mkts_from_business = mkts_from_business[mkts_from_business["mkt_type"] == selected_market_type]
+
+    pieces = [df for df in (mkts_from_flows, mkts_from_volume, mkts_from_business) if not df.empty]
+    if pieces:
+        markets_base = pd.concat(pieces, ignore_index=True)
+        markets_base = markets_base.dropna(subset=["lat", "lon"]).drop_duplicates(subset=["mkt_id"])
+    else:
+        markets_base = pd.DataFrame(columns=["mkt_id", "mkt_name", "mkt_type", "lat", "lon"])
+    if not markets_base.empty and {"mkt_id", "lat", "lon"}.issubset(markets_base.columns):
+        markets_base.loc[markets_base["mkt_id"] == 4004, ["lat", "lon"]] = BAZAR_SAHI_COORDS
+
+    if "show_markers" in (layer_toggles or []):
+        opacity = opacity_percent / 100.0
+        routes_visible = bool(toggle_value) and ("show" in toggle_value)
+
         if not df_map.empty:
-            mkts_from_flows = (
-                df_map[["mkt_id","mkt_name","mkt_type","market_lat","market_lon"]]
-                .drop_duplicates()
-                .rename(columns={"market_lat":"lat","market_lon":"lon"})
-            )
-
-        # From market_volume_df (has lat/lon)
-        mkts_from_volume = df_vol[["mkt_id","mkt_name","mkt_type","lat","lon"]].drop_duplicates()
-
-        # From businesses (covers fish-only or others without tomato flows)
-        mkts_from_business = pd.DataFrame(columns=["mkt_id","mkt_name","mkt_type","lat","lon"])
-        if (business_df is not None) and (not business_df.empty):
-            mkts_from_business = business_df[["mkt_id","mkt_name","mkt_type","lat","lon"]].drop_duplicates()
-            if selected_market_type and selected_market_type != "All Markets":
-                mkts_from_business = mkts_from_business[mkts_from_business["mkt_type"] == selected_market_type]
-
-        markets_base = pd.concat([mkts_from_flows, mkts_from_volume, mkts_from_business], ignore_index=True)
-        markets_base = markets_base.dropna(subset=["lat","lon"]).drop_duplicates(subset=["mkt_id"])
-
-        # ---------------- Trade routes + markers ----------------
-        if "show_markers" in layer_toggles:
-            opacity = opacity_percent / 100.0
-            routes_visible = bool(toggle_value) and ("show" in toggle_value)
-
-            # Routes (if flows exist)
-            if not df_map.empty:
-                if simplify_mode:
-                    palette = ORIGIN_COLOR_PALETTE
-                    if not palette:
-                        palette = ["#2E7D32"]
-                    color_cycle = itertools.cycle(palette)
-                    origin_color_map = {}
-                    for origin_name, group in df_map.groupby("origin_name", observed=True):
-                        color_value = origin_color_map.setdefault(origin_name, next(color_cycle))
-                        if isinstance(color_value, str):
-                            lowered = color_value.lower()
-                            if lowered.startswith("#"):
-                                r, g, b = pcolors.hex_to_rgb(color_value)
-                            elif lowered.startswith("rgba"):
-                                r, g, b, _ = pcolors.unlabel_rgba(color_value)
-                            else:
-                                r, g, b = pcolors.unlabel_rgb(color_value)
-                        else:
-                            r, g, b = color_value
-                        color_rgba = f"rgba({r}, {g}, {b}, {opacity})"
-                        lats, lons = [], []
-                        for _, row in group.iterrows():
-                            lats.extend([row["origin_lat"], row["market_lat"], None])
-                            lons.extend([row["origin_lon"], row["market_lon"], None])
+            if simplify_mode:
+                palette = ORIGIN_COLOR_PALETTE or ["#2E7D32"]
+                color_cycle = itertools.cycle(palette)
+                origin_color_map = {}
+                for origin_name, group in df_map.groupby("origin_name", observed=True):
+                    color_value = origin_color_map.setdefault(origin_name, next(color_cycle))
+                    r, g, b = _resolve_color_rgb(color_value)
+                    color_rgba = f"rgba({r}, {g}, {b}, {opacity})"
+                    lats = [item for _, row in group.iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
+                    lons = [item for _, row in group.iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
+                    fig.add_trace(
+                        go.Scattermap(
+                            lat=lats,
+                            lon=lons,
+                            mode="lines",
+                            line=dict(width=2, color=color_rgba),
+                            name=str(origin_name),
+                            hoverinfo="none",
+                            visible=routes_visible,
+                            showlegend=False,
+                        )
+                    )
+            else:
+                share_bins = [
+                    {"name": "High Share (>75%)", "data": df_map[df_map["share"] >= 75], "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
+                    {"name": "Medium Share (25-75%)", "data": df_map[(df_map["share"] < 75) & (df_map["share"] >= 25)], "width": 2, "color": f"rgba(117, 112, 179, {opacity})"},
+                    {"name": "Low Share (<25%)", "data": df_map[df_map["share"] < 25], "width": 1, "color": f"rgba(102, 166, 30, {opacity})"},
+                ]
+                for s_bin in share_bins:
+                    if not s_bin["data"].empty:
+                        lats = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
+                        lons = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
                         fig.add_trace(
                             go.Scattermap(
                                 lat=lats,
                                 lon=lons,
                                 mode="lines",
-                                line=dict(width=2, color=color_rgba),
-                                name=f"{origin_name}",
+                                line=dict(width=s_bin["width"], color=s_bin["color"]),
+                                name=s_bin["name"],
                                 hoverinfo="none",
                                 visible=routes_visible,
-                                showlegend=False,
+                                showlegend=routes_visible,
                             )
                         )
-                else:
-                    share_bins = [
-                        {"name": "High Share (>75%)", "data": df_map[df_map["share"] >= 75], "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
-                        {"name": "Medium Share (25-75%)", "data": df_map[(df_map["share"] < 75) & (df_map["share"] >= 25)], "width": 2, "color": f"rgba(117, 112, 179, {opacity})"},
-                        {"name": "Low Share (<25%)", "data": df_map[df_map["share"] < 25], "width": 1, "color": f"rgba(102, 166, 30, {opacity})"},
-                    ]
-                    for s_bin in share_bins:
-                        if not s_bin["data"].empty:
-                            lats = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
-                            lons = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
-                            fig.add_trace(go.Scattermap(
-                                lat=lats, lon=lons, mode="lines",
-                                line=dict(width=s_bin["width"], color=s_bin["color"]),
-                                name=s_bin["name"], hoverinfo="none", visible=routes_visible))
 
-            # ---- ORIGINS (always draw; fallback if no flows) ----
-            origins_src = network_df[
-                (network_df["season"] == selected_season) &
-                (network_df["Time Period"] == selected_time)
-            ]
-            if selected_market_type and selected_market_type != "All Markets":
-                origins_src = origins_src[origins_src["mkt_type"] == selected_market_type]
+        origins_src = df_flow
+        origins_unique = (
+            origins_src[["origin_name", "origin_lat", "origin_lon"]]
+            .drop_duplicates()
+            .dropna(subset=["origin_lat", "origin_lon"])
+        )
 
-            origins_unique = (
-                origins_src[["origin_name", "origin_lat", "origin_lon"]]
-                .drop_duplicates()
-                .dropna(subset=["origin_lat", "origin_lon"])
+        counts = (
+            origins_src[origins_src["share"] > 0]
+            .groupby("origin_name", observed=True)["mkt_name"]
+            .nunique()
+            .reset_index(name="market_count")
+        )
+
+        origins = origins_unique.merge(counts, on="origin_name", how="left").fillna({"market_count": 0})
+
+        supply_series = None
+        if not df_map.empty:
+            supply_col = next(
+                (col for col in ["Trade Quantity", "trade_quantity", "Volume", "volume", "quantity"] if col in df_map.columns),
+                None,
+            )
+            if supply_col:
+                supply_series = (
+                    df_map.assign(
+                        _supply=pd.to_numeric(df_map[supply_col], errors="coerce").fillna(0.0)
+                    )
+                    .groupby("origin_name", observed=True)["_supply"]
+                    .sum()
+                )
+            elif "share" in df_map.columns:
+                supply_series = (
+                    df_map.assign(
+                        _supply=pd.to_numeric(df_map["share"], errors="coerce").fillna(0.0)
+                    )
+                    .groupby("origin_name", observed=True)["_supply"]
+                    .sum()
+                )
+        if supply_series is not None:
+            origins = origins.merge(supply_series.rename("supply_metric"), on="origin_name", how="left")
+        if "supply_metric" not in origins.columns:
+            origins["supply_metric"] = origins["market_count"].astype(float)
+        origins["supply_metric"] = pd.to_numeric(origins["supply_metric"], errors="coerce").fillna(0.0)
+
+        supply_values = origins["supply_metric"]
+        max_supply = float(supply_values.max()) if not supply_values.empty else 0.0
+        if max_supply > 0:
+            normalized_supply = (supply_values / max_supply).clip(lower=0.0, upper=1.0)
+        else:
+            normalized_supply = pd.Series(0.0, index=origins.index)
+
+        if simplify_mode:
+            origins["size"] = 20.0
+            fill_value = 20.0
+        else:
+            if is_odisha:
+                min_origin_size, max_origin_size, exponent = 9.0, 26.0, 0.6
+            else:
+                min_origin_size, max_origin_size, exponent = 10.0, 34.0, 0.55
+
+            origins["size"] = min_origin_size + (normalized_supply ** exponent) * (max_origin_size - min_origin_size)
+            fill_value = min_origin_size
+        origins["size"] = origins["size"].fillna(fill_value)
+        origins["hover_text"] = (
+            origins["origin_name"] + "<br>Supplies " + origins["market_count"].astype(int).astype(str) + " market(s)"
+        )
+
+        if not origins.empty:
+            fig.add_trace(
+                go.Scattermap(
+                    lat=origins["origin_lat"],
+                    lon=origins["origin_lon"],
+                    mode="markers",
+                    marker=dict(size=origins["size"], color="#a50f15", opacity=0.9),
+                    name="Produce Origin",
+                    text=origins["hover_text"],
+                    hoverinfo="text",
+                )
             )
 
-            counts = (
-                origins_src[origins_src["share"] > 0]
-                .groupby("origin_name", observed=True)["mkt_name"]
-                .nunique()
-                .reset_index(name="market_count")
+        if not markets_base.empty:
+            market_hover_info = pd.DataFrame(columns=["mkt_name", "details"])
+            if not df_map.empty:
+                market_hover_info = (
+                    df_map.assign(origin_share_str=df_map["origin_name"].astype(str) + ": " + df_map["share"].astype(int).astype(str) + "%")
+                    .groupby("mkt_name", observed=True)["origin_share_str"].apply("<br>".join)
+                    .reset_index(name="details")
+                )
+
+            markets = (
+                markets_base
+                .merge(df_vol[["mkt_id", "Total Volume"]], on="mkt_id", how="left")
+                .merge(market_hover_info, on="mkt_name", how="left")
+            ).fillna({"Total Volume": 0, "details": "n/a"})
+
+            if show_businesses and (biz_metrics_for_hover is not None):
+                markets = markets.merge(biz_metrics_for_hover, on="mkt_id", how="left")
+            else:
+                markets["biz_count"] = pd.NA
+                markets["biz_median_km"] = pd.NA
+
+            def _fmt_int(val):
+                return "n/a" if pd.isna(val) else f"{int(round(float(val))):,}"
+
+            def _fmt_km(val):
+                return "NA" if pd.isna(val) else f"{float(val):.2f} km"
+
+            volume_formatted = markets["Total Volume"].round(0).astype(int).apply(lambda x: f"{x:,}")
+            base_text = (
+                "<b>" + markets["mkt_name"] + "</b><br><i>" + markets["mkt_type"].fillna("") + "</i><br>"
+                + "Trade Quantity: " + volume_formatted + f" {quantity_label}<br>"
+                + "--- Origins ---<br>" + markets["details"].fillna("n/a")
             )
 
-            origins = origins_unique.merge(counts, on="origin_name", how="left").fillna({"market_count": 0})
-            origins["size"] = 4 + origins["market_count"].astype(float)
+            if show_businesses:
+                biz_block = (
+                    "<br>--- Businesses ---<br>"
+                    + biz_label_for_hover + f" ({selected_time}): "
+                    + markets["biz_count"].apply(_fmt_int)
+                    + "<br>Median distance: "
+                    + markets["biz_median_km"].apply(_fmt_km)
+                )
+                markets["hover_text"] = base_text + biz_block
+            else:
+                markets["hover_text"] = base_text
+
+            volumes = markets["Total Volume"].clip(lower=0).astype(float)
+            q95 = float(volumes.quantile(0.95)) if len(volumes) > 1 else float(volumes.max())
+            denom = q95 if (not math.isnan(q95) and q95 > 0) else 1.0
+            normalized_volume = (volumes / denom).clip(lower=0.0, upper=1.0)
             if simplify_mode:
-                origins["size"] = 12
-            origins["hover_text"] = (
-                origins["origin_name"] + "<br>Supplies " +
-                origins["market_count"].astype(int).astype(str) + " market(s)"
+                markets["size"] = 22.0
+                fill_value = 22.0
+            else:
+                if is_odisha:
+                    min_market_size, max_market_size, vol_exponent = 9.0, 30.0, 0.85
+                else:
+                    min_market_size, max_market_size, vol_exponent = 10.0, 38.0, 0.75
+                markets["size"] = min_market_size + (normalized_volume ** vol_exponent) * (max_market_size - min_market_size)
+                fill_value = min_market_size
+            markets["size"] = markets["size"].fillna(fill_value)
+            fig.add_trace(
+                go.Scattermap(
+                    lat=markets["lat"],
+                    lon=markets["lon"],
+                    mode="markers",
+                    marker=dict(size=markets["size"], color="blue", opacity=0.9),
+                    name="Market",
+                    text=markets["hover_text"],
+                    hoverinfo="text",
+                )
+            )
+        else:
+            fig.add_annotation(
+                text="No markets found for this selection.",
+                showarrow=False,
+                font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"),
+            )
+    fig.add_trace(
+        go.Scattermap(
+            lat=[center.get("lat", 0.0)],
+            lon=[center.get("lon", 0.0)],
+            mode="markers",
+            marker=dict(size=0.01, color="rgba(0,0,0,0)"),
+            showlegend=False,
+            hoverinfo="none",
+        )
+    )
+
+    fig.update_layout(
+        margin=dict(r=0, l=0, b=0, t=0),
+        uirevision=f"network-{region_code}",
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.92,
+            xanchor="right",
+            x=0.99,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0.1)",
+            borderwidth=1,
+            traceorder="normal",
+            itemsizing="constant",
+            font=dict(size=11),
+        ),
+        map=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
+        transition={"duration": 650, "easing": "cubic-in-out"},
+    )
+
+    map_title = f"{region_data['label']}: {selected_season} - {selected_time}"
+    return fig, map_title, "", simplify_label, legend_children, legend_class
+
+
+# --------------------------- COMBINED MAP ----------------------------------
+@app.callback(
+    [
+        Output("combined-map", "figure"),
+        Output("combined-map-title", "children"),
+        Output("combined-loading-sentinel", "children"),
+    ],
+    [
+        Input("region-selector", "value"),
+        Input("master-market-type-filter", "value"),
+        Input("data-type-toggle", "value"),
+        Input("view-type-toggle", "value"),
+        Input("combined-trader-type-dropdown", "value"),
+        Input("combined-season-toggle", "value"),
+        Input("combined-time-slider", "value"),
+    ],
+    [State("combined-map", "relayoutData")],
+)
+def update_combined_map(
+    region_key,
+    market_type,
+    data_type,
+    view_type,
+    selected_trader,
+    selected_season,
+    time_value,
+    relayout_data,
+):
+    region_data = load_region_data(region_key)
+    region_code = region_data.get("key", str(region_key).lower())
+    market_volume_df = region_data["market_volume_df"]
+    trader_df_local = region_data["trader_df"]
+    time_periods = list(region_data.get("time_periods") or ["Now"])
+
+    try:
+        time_index = int(time_value)
+    except (TypeError, ValueError):
+        time_index = len(time_periods) - 1
+    if not time_periods:
+        time_periods = ["Now"]
+    time_index = max(0, min(time_index, len(time_periods) - 1))
+    selected_time = time_periods[time_index]
+
+    fig = go.Figure()
+
+    if data_type == "tomatoes":
+        df = market_volume_df.copy()
+        if market_type and market_type != "All Markets":
+            df = df[df["mkt_type"] == market_type]
+        df = df[(df["season"] == selected_season) & (df["Time Period"] == selected_time) & (df["Total Volume"] > 0)]
+        if {"mkt_id", "lat", "lon"}.issubset(df.columns):
+            df.loc[df["mkt_id"] == 4004, ["lat", "lon"]] = BAZAR_SAHI_COORDS
+        if region_code == "odisha":
+            title_parts = [region_data['label'], "Vegetable Trade Volume", selected_season, selected_time]
+            colorbar_title = "Vegetable Volume (tons)"
+        else:
+            title_parts = [region_data['label'], "Tomato Trade Volume", selected_season, selected_time]
+            colorbar_title = "Tomato Volume (tons)"
+        z_value_col = "Total Volume"
+        colorscale = "Viridis"
+    else:
+        df = trader_df_local.copy()
+        if market_type and market_type != "All Markets" and "mkt_type" in df.columns:
+            df = df[df["mkt_type"] == market_type]
+        if "trader_id" in df.columns and selected_trader and selected_trader != "All":
+            df = df[df["trader_id"] == selected_trader]
+        df = df.groupby(["mkt_name", "lat", "lon"], observed=True)[selected_time].sum().reset_index()
+        df = df[df[selected_time] > 0]
+        if "mkt_name" in df.columns and {"lat", "lon"}.issubset(df.columns):
+            df.loc[df["mkt_name"] == "Bazar Sahi Hat", ["lat", "lon"]] = BAZAR_SAHI_COORDS
+        trader_label = selected_trader if (selected_trader and selected_trader != "All") else "All Traders"
+        title_parts = [region_data['label'], trader_label, selected_time]
+        z_value_col = selected_time
+        colorscale = "Plasma"
+        colorbar_title = "No. of Traders"
+
+    map_title = " - ".join([part for part in title_parts if part])
+
+    if df.empty:
+        fig.add_annotation(text="No data available for this selection.", showarrow=False)
+    else:
+        df["hover_text"] = (
+            "<b>" + df["mkt_name"] + "</b><br>" + colorbar_title + ": " + df[z_value_col].round(0).astype(int).apply(lambda x: f"{x:,}")
+        )
+        if view_type == "points":
+            if data_type == "tomatoes":
+                scale_factor = 0.1
+                df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * scale_factor
+            else:
+                scale_factor = 0.8 if region_code != "odisha" else 1.4
+                min_size, max_size = (6.0, 30.0) if region_code == "odisha" else (5.0, 22.0)
+                values = df[z_value_col].clip(lower=0)
+                q95 = float(values.quantile(0.95)) if len(values) > 1 else float(values.max())
+                denom = q95 if (not math.isnan(q95) and q95 > 0) else 1.0
+                normalized = (values / denom).clip(lower=0.0, upper=1.0)
+                df["size"] = min_size + (normalized ** 0.7) * (max_size - min_size)
+            fig.add_trace(
+                go.Scattermap(
+                    lat=df["lat"],
+                    lon=df["lon"],
+                    mode="markers",
+                    marker=dict(
+                        size=df["size"],
+                        color=df[z_value_col],
+                        colorscale=colorscale,
+                        cmin=0,
+                        cmax=float(df[z_value_col].quantile(0.95)) if len(df) > 1 else None,
+                        showscale=True,
+                        colorbar=dict(title=colorbar_title),
+                    ),
+                    text=df["hover_text"],
+                    hoverinfo="text",
+                )
+            )
+        else:
+            heatmap_radius = 30 if data_type == "traders" else 20
+            fig.add_trace(
+                go.Densitymap(
+                    lat=df["lat"],
+                    lon=df["lon"],
+                    z=df[z_value_col],
+                    radius=heatmap_radius,
+                    colorscale=colorscale,
+                    colorbar=dict(title=colorbar_title),
+                )
+            )
+            fig.add_trace(
+                go.Scattermap(
+                    lat=df["lat"],
+                    lon=df["lon"],
+                    mode="markers",
+                    marker=dict(size=10, color="rgba(0,0,0,0)"),
+                    text=df["hover_text"],
+                    hoverinfo="text",
+                    showlegend=False,
+                )
             )
 
-            fig.add_trace(go.Scattermap(
-                lat=origins["origin_lat"],
-                lon=origins["origin_lon"],
-                mode="markers",
-                marker=dict(size=origins["size"], color="#a50f15", opacity=0.9),
-                name="Produce Origin",
-                text=origins["hover_text"],
-                hoverinfo="text"
-            ))
-            # ---- END ORIGINS ----
+    defaults = region_data.get("map_defaults") or {"center": {"lat": 0.5, "lon": 37.5}, "zoom": 5.5}
+    zoom = defaults.get("zoom", 5.5)
+    center = defaults.get("center", {"lat": 0.5, "lon": 37.5})
 
-            # Markets (build from union; then merge volumes, flows hover, and businesses hover)
-            if not markets_base.empty:
-                # Flow details per market (only where flows exist)
-                market_hover_info = pd.DataFrame(columns=["mkt_name","details"])
-                if not df_map.empty:
-                    market_hover_info = (
-                        df_map.assign(origin_share_str=df_map["origin_name"].astype(str) + ": " + df_map["share"].astype(int).astype(str) + "%")
-                        .groupby("mkt_name", observed=True)["origin_share_str"].apply("<br>".join).reset_index(name="details")
-                    )
+    triggered_props = {item["prop_id"].split(".")[0] for item in (callback_context.triggered or [])}
+    region_changed = "region-selector" in triggered_props
 
-                markets = (
-                    markets_base
-                    .merge(df_vol[["mkt_id","Total Volume"]], on="mkt_id", how="left")
-                    .merge(market_hover_info, on="mkt_name", how="left")
-                ).fillna({"Total Volume":0, "details":"n/a"})
+    if relayout_data and "map.center" in relayout_data and not region_changed:
+        zoom = relayout_data.get("map.zoom", zoom)
+        center = relayout_data.get("map.center", center)
 
-                # Append businesses (if enabled) to the market hover
-                if show_businesses and (biz_metrics_for_hover is not None):
-                    markets = markets.merge(biz_metrics_for_hover, on="mkt_id", how="left")
-                else:
-                    markets["biz_count"] = pd.NA
-                    markets["biz_median_km"] = pd.NA
-
-                def _fmt_int(x): 
-                    return "n/a" if pd.isna(x) else f"{int(round(float(x))):,}"
-                def _fmt_km(x): 
-                    return "NA" if pd.isna(x) else f"{float(x):.2f} km"
-
-                base_text = (
-                    "<b>" + markets["mkt_name"] + "</b><br><i>" + markets["mkt_type"].fillna("") + "</i><br>"
-                    + "Trade Quantity: " + markets["Total Volume"].round(0).astype(int).apply(lambda x: f"{x:,}") + " units<br>"
-                    + "--- Origins ---<br>" + markets["details"].fillna("n/a")
-                )
-
-                if show_businesses:
-                    biz_block = (
-                        "<br>--- Businesses ---<br>"
-                        + biz_label_for_hover + f" ({selected_time}): "
-                        + markets["biz_count"].apply(_fmt_int)
-                        + "<br>Median distance: "
-                        + markets["biz_median_km"].apply(_fmt_km)
-                    )
-                    markets["hover_text"] = base_text + biz_block
-                else:
-                    markets["hover_text"] = base_text
-
-                if simplify_mode:
-                    markets["size"] = 14
-                else:
-                    markets["size"] = 4 + (markets["Total Volume"].clip(lower=0) ** 0.5) * 0.08
-                fig.add_trace(go.Scattermap(
-                    lat=markets["lat"], lon=markets["lon"], mode="markers",
-                    marker=dict(size=markets["size"], color="blue", opacity=0.9),
-                    name="Market", text=markets["hover_text"], hoverinfo="text"))
-            else:
-                fig.add_annotation(text="No markets found for this selection.", showarrow=False,
-                                font=dict(size=16, color="white" if "show_nightlights" in layer_toggles else "black"))
-
-        # Invisible anchor (stabilizes mapbox render)
-        fig.add_trace(go.Scattermap(
-            lat=[0], lon=[37.5], mode="markers",
-            marker=dict(size=0.01, color="rgba(0,0,0,0)"),
-            showlegend=False, hoverinfo="none"))
-
-        fig.update_layout(
-            margin=dict(r=0, l=0, b=0, t=0),
-            uirevision="keep",
-            showlegend=True,
-            legend=dict(yanchor="top", y=0.92, xanchor="right", x=0.99,
-                        bgcolor="rgba(255,255,255,0.85)", bordercolor="rgba(0,0,0,0.1)", borderwidth=1,
-                        traceorder="normal", itemsizing="constant", font=dict(size=11)),
-            map=dict(style=mapbox_style, layers=layers, zoom=zoom, center=center),
-            transition={"duration": 300},
-        )
-
-        map_title = f"{selected_season} - {selected_time}"
-        return fig, map_title, "", simplify_label  # ping spinner
-
-
-    # --------------------------- COMBINED MAP ----------------------------------
-    @app.callback(
-        [
-            Output("combined-map", "figure"),
-            Output("combined-map-title", "children"),
-            Output("combined-loading-sentinel", "children"),
-        ],
-        [
-            Input("master-market-type-filter", "value"),
-            Input("data-type-toggle", "value"),
-            Input("view-type-toggle", "value"),
-            Input("combined-trader-type-dropdown", "value"),
-            Input("combined-season-toggle", "value"),
-            Input("combined-time-slider", "value"),
-        ],
-        [State("combined-map", "relayoutData")],
+    fig.update_layout(
+        margin=dict(r=0, l=0, b=0, t=0),
+        uirevision=f"combined-{region_code}",
+        map=dict(style=MAPBOX_STYLE_LIGHT, zoom=zoom, center=center),
+        transition={"duration": 650, "easing": "cubic-in-out"},
     )
-    def update_combined_map(market_type, data_type, view_type, selected_trader, selected_season, time_value, relayout_data):
-        time_map = {0: "10 Yrs Ago", 1: "5 Yrs Ago", 2: "Now"}
-        selected_time = time_map.get(time_value, "Now")
+    return fig, map_title, ""
 
-        fig = go.Figure()
-
-        if data_type == "tomatoes":
-            df = market_volume_df.copy()
-            if market_type and market_type != "All Markets":
-                df = df[df["mkt_type"] == market_type]
-            df = df[(df["season"] == selected_season) & (df["Time Period"] == selected_time) & (df["Total Volume"] > 0)]
-            title_parts = ["Tomato Trade Volume", selected_season, selected_time]
-            z_value_col = "Total Volume"
-            colorscale = "Viridis"
-            colorbar_title = "Trade Volume"
-        else:
-            df = trader_df.copy()
-            if market_type and market_type != "All Markets":
-                df = df[df["mkt_type"] == market_type]
-            if selected_trader and selected_trader != "All":
-                df = df[df["trader_id"] == selected_trader]
-            df = df.groupby(["mkt_name", "lat", "lon"], observed=True)[selected_time].sum().reset_index()
-            df = df[df[selected_time] > 0]
-            title_parts = [f"{selected_trader} Traders" if selected_trader and selected_trader != "All" else "All Traders", selected_time]
-            z_value_col = selected_time
-            colorscale = "Plasma"
-            colorbar_title = "No. of Traders"
-
-        map_title = " - ".join(title_parts)
-
-        if df.empty:
-            fig.add_annotation(text="No data available for this selection.", showarrow=False)
-        else:
-            df["hover_text"] = "<b>" + df["mkt_name"] + "</b><br>" + colorbar_title + ": " + df[z_value_col].round(0).astype(int).apply(lambda x: f"{x:,}")
-            if view_type == "points":
-                df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * (0.1 if data_type == "tomatoes" else 0.8)
-                fig.add_trace(
-                    go.Scattermap(
-                        lat=df["lat"], lon=df["lon"], mode="markers",
-                        marker=dict(
-                            size=df["size"], color=df[z_value_col], colorscale=colorscale,
-                            cmin=0, cmax=float(df[z_value_col].quantile(0.95)) if len(df) > 1 else None,
-                            showscale=True, colorbar=dict(title=colorbar_title),
-                        ),
-                        text=df["hover_text"], hoverinfo="text",
-                    )
-                )
-            else:
-                heatmap_radius = 30 if data_type == "traders" else 20
-                fig.add_trace(go.Densitymap(lat=df["lat"], lon=df["lon"], z=df[z_value_col],
-                                               radius=heatmap_radius, colorscale=colorscale,
-                                               colorbar=dict(title=colorbar_title)))
-                fig.add_trace(go.Scattermap(lat=df["lat"], lon=df["lon"], mode="markers",
-                                               marker=dict(size=10, color="rgba(0,0,0,0)"),
-                                               text=df["hover_text"], hoverinfo="text", showlegend=False))
-
-        zoom, center = 5.5, {"lat": 0.5, "lon": 37.5}
-        if relayout_data and "map.center" in relayout_data:
-            zoom = relayout_data.get("map.zoom", zoom)
-            center = relayout_data.get("map.center", center)
-
-        fig.update_layout(
-            margin=dict(r=0, l=0, b=0, t=0),
-            uirevision="keep",
-            map=dict(style=MAPBOX_STYLE_LIGHT, zoom=zoom, center=center),
-            transition={"duration": 300},
-        )
-        return fig, map_title, ""  # ping spinner
+# ------------------------------------------------------------------------------
+# 6) RUN
 
 
 # ------------------------------------------------------------------------------
@@ -1191,9 +2060,12 @@ if data_load_success:
 # ------------------------------------------------------------------------------
 # app.py (at bottom)
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8050"))
-    debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug_flag)
+    is_render = bool(os.getenv("RENDER") or os.getenv("PORT"))
+    host = "0.0.0.0" if is_render else "127.0.0.1"
+    port = int(os.getenv("PORT", "8050"))
+    debug_flag = os.getenv("DASH_DEBUG", "1") == "1"
+    print(f"→ Open http://localhost:{port}")
+    app.run(host=host, port=port, debug=debug_flag)
 
 
 
