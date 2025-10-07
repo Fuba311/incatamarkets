@@ -3,13 +3,16 @@
 print("--- STARTING INCATA MARKET ANALYSIS DASHBOARD ---")
 
 import os
+import itertools
 from pathlib import Path
 import json
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.colors as pcolors
 import dash
 from dash import dcc, html, no_update, callback_context
 from dash.dependencies import Input, Output, State, MATCH
+from plotly.colors import qualitative as qual_colors
 
 # ------------------------------------------------------------------------------
 # 1) APP INIT
@@ -909,12 +912,45 @@ if data_load_success:
             # Routes (if flows exist)
             if not df_map.empty:
                 if simplify_mode:
-                    lats = [item for _, row in df_map.iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
-                    lons = [item for _, row in df_map.iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
-                    fig.add_trace(go.Scattermap(
-                        lat=lats, lon=lons, mode="lines",
-                        line=dict(width=2, color=f"rgba(46, 125, 50, {opacity})"),
-                        name="Trade Routes", hoverinfo="none", visible=routes_visible))
+                    palette = (
+                        list(qual_colors.Dark24)
+                        + list(qual_colors.Set3)
+                        + list(qual_colors.Safe)
+                        + list(qual_colors.Set2)
+                    )
+                    if not palette:
+                        palette = ["#2E7D32"]
+                    color_cycle = itertools.cycle(palette)
+                    origin_color_map = {}
+                    for origin_name, group in df_map.groupby("origin_name", observed=True):
+                        color_value = origin_color_map.setdefault(origin_name, next(color_cycle))
+                        if isinstance(color_value, str):
+                            lowered = color_value.lower()
+                            if lowered.startswith("#"):
+                                r, g, b = pcolors.hex_to_rgb(color_value)
+                            elif lowered.startswith("rgba"):
+                                r, g, b, _ = pcolors.unlabel_rgba(color_value)
+                            else:
+                                r, g, b = pcolors.unlabel_rgb(color_value)
+                        else:
+                            r, g, b = color_value
+                        color_rgba = f"rgba({r}, {g}, {b}, {opacity})"
+                        lats, lons = [], []
+                        for _, row in group.iterrows():
+                            lats.extend([row["origin_lat"], row["market_lat"], None])
+                            lons.extend([row["origin_lon"], row["market_lon"], None])
+                        fig.add_trace(
+                            go.Scattermap(
+                                lat=lats,
+                                lon=lons,
+                                mode="lines",
+                                line=dict(width=2, color=color_rgba),
+                                name=f"{origin_name}",
+                                hoverinfo="none",
+                                visible=routes_visible,
+                                showlegend=False,
+                            )
+                        )
                 else:
                     share_bins = [
                         {"name": "High Share (>75%)", "data": df_map[df_map["share"] >= 75], "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
@@ -1145,6 +1181,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
+
+
+
 
 
 
