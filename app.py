@@ -440,6 +440,28 @@ if data_load_success:
                                                     ),
                                                 ],
                                             ),
+                                            # SIMPLIFY BUTTON
+                                            html.Div(
+                                                style={"marginBottom": "14px"},
+                                                children=[
+                                                    html.Button(
+                                                        "Simplify Map: Off",
+                                                        id="simplify-map-btn",
+                                                        n_clicks=0,
+                                                        style={
+                                                            "width": "100%",
+                                                            "cursor": "pointer",
+                                                            "border": "1px solid #004085",
+                                                            "backgroundColor": "#f8f9fa",
+                                                            "padding": "7px 10px",
+                                                            "borderRadius": "6px",
+                                                            "fontSize": "12px",
+                                                            "color": "#004085",
+                                                            "fontWeight": "600",
+                                                        },
+                                                    )
+                                                ],
+                                            ),
                                             # INFO BUTTON
                                             html.Div(
                                                 style={"borderTop": "1px solid #e0e0e0", "paddingTop": "10px", "marginTop": "10px"},
@@ -693,6 +715,7 @@ if data_load_success:
         Output("network-map", "figure"),
         Output("network-map-title", "children"),
         Output("network-loading-sentinel", "children"),  # drives the spinner
+        Output("simplify-map-btn", "children"),
     ],
     [
         Input("master-market-type-filter", "value"),
@@ -701,6 +724,7 @@ if data_load_success:
         Input("opacity-dropdown", "value"),
         Input("toggle-routes", "value"),
         Input("layer-toggles", "value"),
+        Input("simplify-map-btn", "n_clicks"),
         # Businesses UI (ensure these exist in your layout)
         Input("biz-toggle", "value"),            # checklist ['show'] or []
         Input("biz-type-dropdown", "value"),     # 'All' or a specific business label
@@ -710,7 +734,7 @@ if data_load_success:
     [State("network-map", "relayoutData")],
     )
     def update_network_map(selected_market_type, selected_season, time_value, opacity_percent,
-                        toggle_value, layer_toggles, biz_toggle, biz_type, biz_view_mode, biz_opacity,
+                        toggle_value, layer_toggles, simplify_clicks, biz_toggle, biz_type, biz_view_mode, biz_opacity,
                         relayout_data):
 
         # ---------------- selections / defaults ----------------
@@ -723,6 +747,9 @@ if data_load_success:
             biz_opacity = 70
         show_businesses = bool(biz_toggle) and ("show" in biz_toggle)
         biz_label_for_hover = biz_type if (biz_type and biz_type != "All") else "All businesses"
+        simplify_clicks = simplify_clicks or 0
+        simplify_mode = (simplify_clicks % 2 == 1)
+        simplify_label = "Simplify Map: On" if simplify_mode else "Simplify Map: Off"
 
         # ---------------- flows / volume slices ----------------
         df_flow = network_df[(network_df["season"] == selected_season) & (network_df["Time Period"] == selected_time)]
@@ -880,19 +907,28 @@ if data_load_success:
             routes_visible = bool(toggle_value) and ("show" in toggle_value)
 
             # Routes (if flows exist)
-            share_bins = [
-                {"name": "High Share (>75%)", "data": df_map[df_map["share"] >= 75], "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
-                {"name": "Medium Share (25-75%)", "data": df_map[(df_map["share"] < 75) & (df_map["share"] >= 25)], "width": 2, "color": f"rgba(117, 112, 179, {opacity})"},
-                {"name": "Low Share (<25%)", "data": df_map[df_map["share"] < 25], "width": 1, "color": f"rgba(102, 166, 30, {opacity})"},
-            ]
-            for s_bin in share_bins:
-                if not s_bin["data"].empty:
-                    lats = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
-                    lons = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
+            if not df_map.empty:
+                if simplify_mode:
+                    lats = [item for _, row in df_map.iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
+                    lons = [item for _, row in df_map.iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
                     fig.add_trace(go.Scattermap(
                         lat=lats, lon=lons, mode="lines",
-                        line=dict(width=s_bin["width"], color=s_bin["color"]),
-                        name=s_bin["name"], hoverinfo="none", visible=routes_visible))
+                        line=dict(width=3, color=f"rgba(0, 64, 133, {opacity})"),
+                        name="Trade Routes", hoverinfo="none", visible=routes_visible))
+                else:
+                    share_bins = [
+                        {"name": "High Share (>75%)", "data": df_map[df_map["share"] >= 75], "width": 4, "color": f"rgba(217, 95, 2, {opacity})"},
+                        {"name": "Medium Share (25-75%)", "data": df_map[(df_map["share"] < 75) & (df_map["share"] >= 25)], "width": 2, "color": f"rgba(117, 112, 179, {opacity})"},
+                        {"name": "Low Share (<25%)", "data": df_map[df_map["share"] < 25], "width": 1, "color": f"rgba(102, 166, 30, {opacity})"},
+                    ]
+                    for s_bin in share_bins:
+                        if not s_bin["data"].empty:
+                            lats = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lat"], row["market_lat"], None)]
+                            lons = [item for _, row in s_bin["data"].iterrows() for item in (row["origin_lon"], row["market_lon"], None)]
+                            fig.add_trace(go.Scattermap(
+                                lat=lats, lon=lons, mode="lines",
+                                line=dict(width=s_bin["width"], color=s_bin["color"]),
+                                name=s_bin["name"], hoverinfo="none", visible=routes_visible))
 
             # ---- ORIGINS (always draw; fallback if no flows) ----
             origins_src = network_df[
@@ -917,6 +953,8 @@ if data_load_success:
 
             origins = origins_unique.merge(counts, on="origin_name", how="left").fillna({"market_count": 0})
             origins["size"] = 4 + origins["market_count"].astype(float)
+            if simplify_mode:
+                origins["size"] = 12
             origins["hover_text"] = (
                 origins["origin_name"] + "<br>Supplies " +
                 origins["market_count"].astype(int).astype(str) + " market(s)"
@@ -979,7 +1017,10 @@ if data_load_success:
                 else:
                     markets["hover_text"] = base_text
 
-                markets["size"] = 4 + (markets["Total Volume"].clip(lower=0) ** 0.5) * 0.08
+                if simplify_mode:
+                    markets["size"] = 14
+                else:
+                    markets["size"] = 4 + (markets["Total Volume"].clip(lower=0) ** 0.5) * 0.08
                 fig.add_trace(go.Scattermap(
                     lat=markets["lat"], lon=markets["lon"], mode="markers",
                     marker=dict(size=markets["size"], color="blue", opacity=0.9),
@@ -1006,7 +1047,7 @@ if data_load_success:
         )
 
         map_title = f"{selected_season} - {selected_time}"
-        return fig, map_title, ""  # ping spinner
+        return fig, map_title, "", simplify_label  # ping spinner
 
 
     # --------------------------- COMBINED MAP ----------------------------------
@@ -1104,6 +1145,8 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
+
+
 
 
 
