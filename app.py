@@ -805,8 +805,8 @@ if data_load_success:
 
         # Roads above nightlights
         if "show_roads" in layer_toggles and selected_time in roads_data:
-            road_color = "rgba(255,255,255,0.45)" if "show_nightlights" in layer_toggles else "rgba(100,100,100,0.7)"
-            road_width = 1.3 if "show_nightlights" in layer_toggles else 0.9
+            road_color = "rgba(255,255,255,0.65)" if "show_nightlights" in layer_toggles else "rgba(40,40,40,0.95)"
+            road_width = 2.6 if "show_nightlights" in layer_toggles else 2.0
             layers.append({
                 "sourcetype": "geojson",
                 "source": roads_data[selected_time],
@@ -1194,9 +1194,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8050"))
     debug_flag = os.environ.get("DASH_DEBUG", "1") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_flag)
-
-
-
 
 
 
