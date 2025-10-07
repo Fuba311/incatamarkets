@@ -14,6 +14,24 @@ from dash import dcc, html, no_update, callback_context
 from dash.dependencies import Input, Output, State, MATCH
 from plotly.colors import qualitative as qual_colors
 
+def _unique_color_sequence(colors):
+    """Return colors with preserved order but without duplicates (case-insensitive)."""
+    seen = set()
+    unique = []
+    for color in colors:
+        key = str(color).lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(color)
+    return unique
+
+# Highly distinct qualitative palette to cycle through per-origin routes in simplified mode.
+ORIGIN_COLOR_PALETTE = _unique_color_sequence(
+    list(qual_colors.Alphabet)
+    + list(qual_colors.Vivid)
+    + list(qual_colors.Safe)
+)
+
 # ------------------------------------------------------------------------------
 # 1) APP INIT
 # ------------------------------------------------------------------------------
@@ -912,12 +930,7 @@ if data_load_success:
             # Routes (if flows exist)
             if not df_map.empty:
                 if simplify_mode:
-                    palette = (
-                        list(qual_colors.Dark24)
-                        + list(qual_colors.Set3)
-                        + list(qual_colors.Safe)
-                        + list(qual_colors.Set2)
-                    )
+                    palette = ORIGIN_COLOR_PALETTE
                     if not palette:
                         palette = ["#2E7D32"]
                     color_cycle = itertools.cycle(palette)
