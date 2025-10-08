@@ -225,6 +225,114 @@ def _clean_unique(series):
         values = []
     return values
 
+def _augment_region_scaling(region_data: dict) -> dict:
+    market_volume_df = region_data.get("market_volume_df")
+    trader_df = region_data.get("trader_df")
+    business_df = region_data.get("business_df")
+    network_df = region_data.get("network_df")
+    time_periods = list(region_data.get("time_periods") or [])
+
+    # ---- Market volumes ----
+    volume_max_global = 0.0
+    volume_max_by_type = {}
+    if market_volume_df is not None and "Total Volume" in market_volume_df.columns:
+        all_volumes = pd.to_numeric(market_volume_df["Total Volume"], errors="coerce")
+        if not all_volumes.empty:
+            volume_max_global = float(all_volumes.max(skipna=True) or 0.0)
+        if "mkt_type" in market_volume_df.columns:
+            for mkt_value, group in market_volume_df.groupby("mkt_type", observed=True):
+                if pd.isna(mkt_value):
+                    continue
+                group_volumes = pd.to_numeric(group["Total Volume"], errors="coerce")
+                if not group_volumes.empty:
+                    vmax = group_volumes.max(skipna=True)
+                    if pd.notna(vmax):
+                        volume_max_by_type[mkt_value] = float(vmax)
+    region_data["volume_max_global"] = volume_max_global
+    region_data["volume_max_by_type"] = volume_max_by_type
+
+    # ---- Trader maxima ----
+    trader_time_cols = [col for col in time_periods if trader_df is not None and col in trader_df.columns]
+    trader_max_global = 0.0
+    trader_max_by_market_type = {}
+    trader_max_by_trader = {}
+    trader_max_by_market_and_trader = {}
+
+    def _max_trader_value(df_subset):
+        if df_subset is None or df_subset.empty or not trader_time_cols:
+            return 0.0
+        group_cols = [col for col in ["mkt_name", "lat", "lon"] if col in df_subset.columns]
+        if not group_cols:
+            return 0.0
+        grouped = df_subset.groupby(group_cols, observed=True)[trader_time_cols].sum()
+        if grouped.empty:
+            return 0.0
+        max_val = pd.to_numeric(grouped[trader_time_cols].stack(), errors="coerce").max(skipna=True)
+        return float(max_val) if pd.notna(max_val) else 0.0
+
+    if trader_df is not None:
+        trader_max_global = _max_trader_value(trader_df)
+        if "mkt_type" in trader_df.columns:
+            for mkt_value, subset in trader_df.groupby("mkt_type", observed=True):
+                if pd.isna(mkt_value):
+                    continue
+                trader_max_by_market_type[mkt_value] = _max_trader_value(subset)
+        if "trader_id" in trader_df.columns:
+            for trader_id, subset in trader_df.groupby("trader_id", observed=True):
+                if pd.isna(trader_id):
+                    continue
+                trader_max_by_trader[trader_id] = _max_trader_value(subset)
+                if "mkt_type" in subset.columns:
+                    for mkt_value, combo_subset in subset.groupby("mkt_type", observed=True):
+                        if pd.isna(mkt_value):
+                            continue
+                        trader_max_by_market_and_trader[(mkt_value, trader_id)] = _max_trader_value(combo_subset)
+
+    region_data["trader_time_columns"] = trader_time_cols
+    region_data["trader_max_global"] = trader_max_global
+    region_data["trader_max_by_market_type"] = trader_max_by_market_type
+    region_data["trader_max_by_trader"] = trader_max_by_trader
+    region_data["trader_max_by_market_and_trader"] = trader_max_by_market_and_trader
+
+    # ---- Business maxima ----
+    business_max_by_time = {}
+    business_max_global = 0.0
+    if business_df is not None and not business_df.empty:
+        biz_group_cols = [col for col in ["mkt_id", "mkt_name", "mkt_type", "lat", "lon"] if col in business_df.columns]
+        if biz_group_cols:
+            candidate_time_cols = [col for col in time_periods if col in business_df.columns]
+            for time_label in candidate_time_cols:
+                totals = business_df.groupby(biz_group_cols, observed=True)[time_label].sum(min_count=1)
+                max_val = pd.to_numeric(totals, errors="coerce").max(skipna=True)
+                if pd.notna(max_val):
+                    business_max_by_time[time_label] = float(max_val)
+                    business_max_global = max(business_max_global, float(max_val))
+    region_data["business_max_by_time"] = business_max_by_time
+    region_data["business_max_global"] = business_max_global
+
+    # ---- Origin supply maxima ----
+    origin_supply_max = 0.0
+    if network_df is not None and not network_df.empty:
+        supply_col = next(
+            (col for col in ["Trade Quantity", "trade_quantity", "Volume", "volume", "quantity"] if col in network_df.columns),
+            None,
+        )
+        if supply_col:
+            supply_series = pd.to_numeric(network_df[supply_col], errors="coerce").fillna(0.0)
+        else:
+            supply_series = pd.to_numeric(network_df.get("share", 0), errors="coerce").fillna(0.0)
+        totals = (
+            network_df.assign(_supply_metric=supply_series)
+            .groupby("origin_name", observed=True)["_supply_metric"]
+            .sum(min_count=1)
+        )
+        max_val = pd.to_numeric(totals, errors="coerce").max(skipna=True)
+        if pd.notna(max_val):
+            origin_supply_max = float(max_val)
+    region_data["origin_supply_max"] = origin_supply_max
+
+    return region_data
+
 def load_region_data(region_key: str):
     region_key = _canonical_region(region_key)
     if not region_key:
@@ -331,6 +439,7 @@ def load_region_data(region_key: str):
         if optional_key in spec:
             region_data[optional_key] = spec[optional_key]
 
+    region_data = _augment_region_scaling(region_data)
     _region_cache[region_key] = region_data
     print(f"--- Completed loading for {spec['label']} ---\n")
     return region_data
@@ -423,6 +532,118 @@ ORIGIN_COLOR_PALETTE = _unique_color_sequence(
 )
 
 BAZAR_SAHI_COORDS = (19.37773, 84.56691)
+
+
+def _format_market_type_label(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in {"yes", "no"}:
+        return f"Wholesaler: {text.capitalize()}"
+    return text
+
+
+def _normalized_series(series, max_value=None):
+    numeric = pd.to_numeric(series, errors="coerce").fillna(0.0)
+    cap = float(max_value) if max_value is not None else float(numeric.max()) if not numeric.empty else 0.0
+    if not cap or cap <= 0:
+        cap = float(numeric.max()) if not numeric.empty else 1.0
+        if not cap:
+            cap = 1.0
+    normalized = (numeric / cap).clip(lower=0.0, upper=1.0)
+    return numeric, normalized, cap
+
+
+def _resolve_volume_cap(region_data, market_type):
+    cap = region_data.get("volume_max_global", 0.0)
+    if market_type and market_type != "All Markets":
+        cap = region_data.get("volume_max_by_type", {}).get(market_type, cap)
+    return cap or 0.0
+
+
+def _resolve_trader_cap(region_data, market_type, trader_id):
+    cap = region_data.get("trader_max_global", 0.0)
+    if trader_id and trader_id != "All":
+        cap = region_data.get("trader_max_by_trader", {}).get(trader_id, cap)
+        if market_type and market_type != "All Markets":
+            cap = region_data.get("trader_max_by_market_and_trader", {}).get((market_type, trader_id), cap)
+    elif market_type and market_type != "All Markets":
+        cap = region_data.get("trader_max_by_market_type", {}).get(market_type, cap)
+    return cap or 0.0
+
+
+def _resolve_business_cap(region_data, time_label):
+    return region_data.get("business_max_by_time", {}).get(time_label, region_data.get("business_max_global", 0.0)) or 0.0
+
+
+def _extract_map_view(relayout_data):
+    if not isinstance(relayout_data, dict):
+        return None, None
+    center = None
+    zoom = None
+    for key in ("mapbox.center", "map.center"):
+        candidate = relayout_data.get(key)
+        if isinstance(candidate, dict) and "lat" in candidate and "lon" in candidate:
+            try:
+                center = {"lat": float(candidate["lat"]), "lon": float(candidate["lon"])}
+            except (TypeError, ValueError):
+                center = None
+            break
+    for key in ("mapbox.zoom", "map.zoom"):
+        candidate = relayout_data.get(key)
+        if candidate is not None:
+            try:
+                zoom = float(candidate)
+            except (TypeError, ValueError):
+                zoom = None
+            if zoom is not None:
+                break
+    return center, zoom
+
+
+def _center_within_region(center, region_data, margin=1.5):
+    if not center or "lat" not in center or "lon" not in center:
+        return False
+    try:
+        lat = float(center["lat"])
+        lon = float(center["lon"])
+    except (TypeError, ValueError):
+        return False
+
+    coords = region_data.get("bbox_fallback")
+    if coords:
+        lats = []
+        lons = []
+        for pt in coords:
+            if isinstance(pt, (list, tuple)) and len(pt) == 2:
+                try:
+                    lons.append(float(pt[0]))
+                    lats.append(float(pt[1]))
+                except (TypeError, ValueError):
+                    continue
+        if lats and lons:
+            lat_min, lat_max = min(lats) - margin, max(lats) + margin
+            lon_min, lon_max = min(lons) - margin, max(lons) + margin
+        else:
+            lat_min = lat - 10
+            lat_max = lat + 10
+            lon_min = lon - 10
+            lon_max = lon + 10
+    else:
+        defaults = region_data.get("map_defaults", {})
+        center_defaults = defaults.get("center", {})
+        try:
+            default_lat = float(center_defaults.get("lat"))
+            default_lon = float(center_defaults.get("lon"))
+        except (TypeError, ValueError):
+            return True
+        lat_min, lat_max = default_lat - 10, default_lat + 10
+        lon_min, lon_max = default_lon - 10, default_lon + 10
+
+    return (lat_min <= lat <= lat_max) and (lon_min <= lon <= lon_max)
 
 def _ensure_data_uri(s: str) -> str:
     if not isinstance(s, str):
@@ -1505,15 +1726,22 @@ def update_network_map(
         )
 
     defaults = region_data.get("map_defaults") or {"center": {"lat": 0.5, "lon": 37.5}, "zoom": 5.5}
-    zoom = defaults.get("zoom", 5.5)
-    center = defaults.get("center", {"lat": 0.5, "lon": 37.5})
+    zoom = float(defaults.get("zoom", 5.5))
+    default_center = defaults.get("center", {"lat": 0.5, "lon": 37.5})
+    try:
+        center = {"lat": float(default_center.get("lat", 0.5)), "lon": float(default_center.get("lon", 37.5))}
+    except (TypeError, ValueError):
+        center = {"lat": 0.5, "lon": 37.5}
 
     triggered_props = {item["prop_id"].split(".")[0] for item in (callback_context.triggered or [])}
     region_changed = "region-selector" in triggered_props
 
-    if relayout_data and "map.center" in relayout_data and not region_changed:
-        zoom = relayout_data.get("map.zoom", zoom)
-        center = relayout_data.get("map.center", center)
+    if relayout_data and not region_changed:
+        relayout_center, relayout_zoom = _extract_map_view(relayout_data)
+        if relayout_center and _center_within_region(relayout_center, region_data):
+            center = relayout_center
+        if relayout_zoom is not None:
+            zoom = relayout_zoom
 
     fig = go.Figure()
 
@@ -1547,23 +1775,28 @@ def update_network_map(
             ]
             legend_class = "map-floating-legend visible"
 
-            q95 = g["count"].quantile(0.95) if len(g) > 1 else g["count"].max()
+            counts = pd.to_numeric(g["count"], errors="coerce").clip(lower=0)
+            q95 = counts.quantile(0.95) if len(g) > 1 else counts.max()
             base = (q95 ** 0.5) if (pd.notna(q95) and q95 > 0) else 1.0
             scale = 32.0 / base
-            g["size"] = 8 + (g["count"].clip(lower=0) ** 0.5) * scale
+            g["size"] = 8 + counts.pow(0.5) * scale
             g["size"] = g["size"].clip(lower=8, upper=70)
 
+            biz_cap = _resolve_business_cap(region_data, selected_time)
+
             if biz_view_mode == "heatmap":
-                fig.add_trace(
-                    go.Densitymap(
-                        lat=g["lat"],
-                        lon=g["lon"],
-                        z=g["count"],
-                        radius=34,
-                        colorscale="Turbo",
-                        colorbar=dict(title="Businesses"),
-                    )
+                density_kwargs = dict(
+                    lat=g["lat"],
+                    lon=g["lon"],
+                    z=counts,
+                    radius=34,
+                    colorscale="Turbo",
+                    colorbar=dict(title="Businesses"),
                 )
+                if biz_cap > 0:
+                    density_kwargs["zmin"] = 0
+                    density_kwargs["zmax"] = biz_cap
+                fig.add_trace(go.Densitymap(**density_kwargs))
                 fig.add_trace(
                     go.Scattermap(
                         lat=g["lat"],
@@ -1590,26 +1823,27 @@ def update_network_map(
                     )
 
                 has_dist = g["median_km"].notna().any()
-                color_values = g["median_km"] if has_dist else g["count"]
+                color_values = g["median_km"] if has_dist else counts
                 cscale = "YlOrRd" if has_dist else "Blues"
-                cmax = float(color_values.quantile(0.95)) if len(g) > 1 else None
                 ctitle = "Median dist (km)" if has_dist else "Businesses"
+                marker_kwargs = dict(
+                    size=g["size"],
+                    color=color_values,
+                    colorscale=cscale,
+                    cmin=0,
+                    opacity=(biz_opacity / 100.0),
+                    showscale=True,
+                    colorbar=dict(title=ctitle),
+                )
+                if not has_dist and biz_cap > 0:
+                    marker_kwargs["cmax"] = biz_cap
 
                 fig.add_trace(
                     go.Scattermap(
                         lat=g["lat"],
                         lon=g["lon"],
                         mode="markers",
-                        marker=dict(
-                            size=g["size"],
-                            color=color_values,
-                            colorscale=cscale,
-                            cmin=0,
-                            cmax=cmax,
-                            opacity=(biz_opacity / 100.0),
-                            showscale=True,
-                            colorbar=dict(title=ctitle),
-                        ),
+                        marker=marker_kwargs,
                         name="Businesses",
                         hoverinfo="skip",
                         showlegend=False,
@@ -1735,13 +1969,6 @@ def update_network_map(
             origins["supply_metric"] = origins["market_count"].astype(float)
         origins["supply_metric"] = pd.to_numeric(origins["supply_metric"], errors="coerce").fillna(0.0)
 
-        supply_values = origins["supply_metric"]
-        max_supply = float(supply_values.max()) if not supply_values.empty else 0.0
-        if max_supply > 0:
-            normalized_supply = (supply_values / max_supply).clip(lower=0.0, upper=1.0)
-        else:
-            normalized_supply = pd.Series(0.0, index=origins.index)
-
         if simplify_mode:
             origins["size"] = 20.0
             fill_value = 20.0
@@ -1751,7 +1978,14 @@ def update_network_map(
             else:
                 min_origin_size, max_origin_size, exponent = 10.0, 34.0, 0.55
 
-            origins["size"] = min_origin_size + (normalized_supply ** exponent) * (max_origin_size - min_origin_size)
+            supply_values = origins["supply_metric"].clip(lower=0)
+            max_supply = float(supply_values.max()) if not supply_values.empty else 0.0
+            if max_supply > 0:
+                normalized_supply = (supply_values / max_supply).clip(lower=0.0, upper=1.0)
+            else:
+                normalized_supply = pd.Series(0.0, index=origins.index)
+
+            origins["size"] = min_origin_size + normalized_supply.pow(exponent) * (max_origin_size - min_origin_size)
             fill_value = min_origin_size
         origins["size"] = origins["size"].fillna(fill_value)
         origins["hover_text"] = (
@@ -1799,8 +2033,9 @@ def update_network_map(
                 return "NA" if pd.isna(val) else f"{float(val):.2f} km"
 
             volume_formatted = markets["Total Volume"].round(0).astype(int).apply(lambda x: f"{x:,}")
+            formatted_types = markets["mkt_type"].apply(_format_market_type_label)
             base_text = (
-                "<b>" + markets["mkt_name"] + "</b><br><i>" + markets["mkt_type"].fillna("") + "</i><br>"
+                "<b>" + markets["mkt_name"] + "</b><br><i>" + formatted_types + "</i><br>"
                 + "Trade Quantity: " + volume_formatted + f" {quantity_label}<br>"
                 + "--- Origins ---<br>" + markets["details"].fillna("n/a")
             )
@@ -1817,10 +2052,6 @@ def update_network_map(
             else:
                 markets["hover_text"] = base_text
 
-            volumes = markets["Total Volume"].clip(lower=0).astype(float)
-            q95 = float(volumes.quantile(0.95)) if len(volumes) > 1 else float(volumes.max())
-            denom = q95 if (not math.isnan(q95) and q95 > 0) else 1.0
-            normalized_volume = (volumes / denom).clip(lower=0.0, upper=1.0)
             if simplify_mode:
                 markets["size"] = 22.0
                 fill_value = 22.0
@@ -1829,7 +2060,11 @@ def update_network_map(
                     min_market_size, max_market_size, vol_exponent = 9.0, 30.0, 0.85
                 else:
                     min_market_size, max_market_size, vol_exponent = 10.0, 38.0, 0.75
-                markets["size"] = min_market_size + (normalized_volume ** vol_exponent) * (max_market_size - min_market_size)
+                volumes = markets["Total Volume"].clip(lower=0).astype(float)
+                q95 = float(volumes.quantile(0.95)) if len(volumes) > 1 else float(volumes.max())
+                denom = q95 if (not math.isnan(q95) and q95 > 0) else 1.0
+                normalized_volume = (volumes / denom).clip(lower=0.0, upper=1.0)
+                markets["size"] = min_market_size + normalized_volume.pow(vol_exponent) * (max_market_size - min_market_size)
                 fill_value = min_market_size
             markets["size"] = markets["size"].fillna(fill_value)
             fig.add_trace(
@@ -1941,9 +2176,10 @@ def update_combined_map(
             colorbar_title = "Vegetable Volume (tons)"
         else:
             title_parts = [region_data['label'], "Tomato Trade Volume", selected_season, selected_time]
-            colorbar_title = "Tomato Volume (tons)"
+            colorbar_title = "Tomato Volume (units/day)"
         z_value_col = "Total Volume"
         colorscale = "Viridis"
+        value_cap = _resolve_volume_cap(region_data, market_type)
     else:
         df = trader_df_local.copy()
         if market_type and market_type != "All Markets" and "mkt_type" in df.columns:
@@ -1959,57 +2195,63 @@ def update_combined_map(
         z_value_col = selected_time
         colorscale = "Plasma"
         colorbar_title = "No. of Traders"
+        value_cap = _resolve_trader_cap(region_data, market_type, selected_trader)
 
     map_title = " - ".join([part for part in title_parts if part])
 
     if df.empty:
         fig.add_annotation(text="No data available for this selection.", showarrow=False)
     else:
-        df["hover_text"] = (
-            "<b>" + df["mkt_name"] + "</b><br>" + colorbar_title + ": " + df[z_value_col].round(0).astype(int).apply(lambda x: f"{x:,}")
+        values_numeric, values_normalized, value_cap = _normalized_series(
+            df[z_value_col],
+            value_cap if value_cap else None,
         )
+        value_strings = values_numeric.clip(lower=0).round(0).astype(int).apply(lambda x: f"{x:,}")
+        df["hover_text"] = "<b>" + df["mkt_name"] + "</b><br>" + colorbar_title + ": " + value_strings
         if view_type == "points":
             if data_type == "tomatoes":
-                scale_factor = 0.1
-                df["size"] = 5 + (df[z_value_col].clip(lower=0) ** 0.5) * scale_factor
+                df["size"] = 5 + values_numeric.clip(lower=0).pow(0.5) * 0.1
             else:
-                scale_factor = 0.8 if region_code != "odisha" else 1.4
                 min_size, max_size = (6.0, 30.0) if region_code == "odisha" else (5.0, 22.0)
-                values = df[z_value_col].clip(lower=0)
+                values = values_numeric.clip(lower=0)
                 q95 = float(values.quantile(0.95)) if len(values) > 1 else float(values.max())
                 denom = q95 if (not math.isnan(q95) and q95 > 0) else 1.0
                 normalized = (values / denom).clip(lower=0.0, upper=1.0)
-                df["size"] = min_size + (normalized ** 0.7) * (max_size - min_size)
+                df["size"] = min_size + normalized.pow(0.7) * (max_size - min_size)
+            marker_kwargs = dict(
+                size=df["size"],
+                color=values_numeric,
+                colorscale=colorscale,
+                cmin=0,
+                showscale=True,
+                colorbar=dict(title=colorbar_title),
+            )
+            if value_cap and value_cap > 0:
+                marker_kwargs["cmax"] = value_cap
             fig.add_trace(
                 go.Scattermap(
                     lat=df["lat"],
                     lon=df["lon"],
                     mode="markers",
-                    marker=dict(
-                        size=df["size"],
-                        color=df[z_value_col],
-                        colorscale=colorscale,
-                        cmin=0,
-                        cmax=float(df[z_value_col].quantile(0.95)) if len(df) > 1 else None,
-                        showscale=True,
-                        colorbar=dict(title=colorbar_title),
-                    ),
+                    marker=marker_kwargs,
                     text=df["hover_text"],
                     hoverinfo="text",
                 )
             )
         else:
             heatmap_radius = 30 if data_type == "traders" else 20
-            fig.add_trace(
-                go.Densitymap(
-                    lat=df["lat"],
-                    lon=df["lon"],
-                    z=df[z_value_col],
-                    radius=heatmap_radius,
-                    colorscale=colorscale,
-                    colorbar=dict(title=colorbar_title),
-                )
+            density_kwargs = dict(
+                lat=df["lat"],
+                lon=df["lon"],
+                z=values_numeric,
+                radius=heatmap_radius,
+                colorscale=colorscale,
+                colorbar=dict(title=colorbar_title),
             )
+            if value_cap and value_cap > 0:
+                density_kwargs["zmin"] = 0
+                density_kwargs["zmax"] = value_cap
+            fig.add_trace(go.Densitymap(**density_kwargs))
             fig.add_trace(
                 go.Scattermap(
                     lat=df["lat"],
@@ -2023,15 +2265,22 @@ def update_combined_map(
             )
 
     defaults = region_data.get("map_defaults") or {"center": {"lat": 0.5, "lon": 37.5}, "zoom": 5.5}
-    zoom = defaults.get("zoom", 5.5)
-    center = defaults.get("center", {"lat": 0.5, "lon": 37.5})
+    zoom = float(defaults.get("zoom", 5.5))
+    default_center = defaults.get("center", {"lat": 0.5, "lon": 37.5})
+    try:
+        center = {"lat": float(default_center.get("lat", 0.5)), "lon": float(default_center.get("lon", 37.5))}
+    except (TypeError, ValueError):
+        center = {"lat": 0.5, "lon": 37.5}
 
     triggered_props = {item["prop_id"].split(".")[0] for item in (callback_context.triggered or [])}
     region_changed = "region-selector" in triggered_props
 
-    if relayout_data and "map.center" in relayout_data and not region_changed:
-        zoom = relayout_data.get("map.zoom", zoom)
-        center = relayout_data.get("map.center", center)
+    if relayout_data and not region_changed:
+        relayout_center, relayout_zoom = _extract_map_view(relayout_data)
+        if relayout_center and _center_within_region(relayout_center, region_data):
+            center = relayout_center
+        if relayout_zoom is not None:
+            zoom = relayout_zoom
 
     fig.update_layout(
         margin=dict(r=0, l=0, b=0, t=0),
@@ -2056,6 +2305,13 @@ if __name__ == "__main__":
     debug_flag = os.getenv("DASH_DEBUG", "1") == "1"
     print(f"→ Open http://localhost:{port}")
     app.run(host=host, port=port, debug=debug_flag)
+
+
+
+
+
+
+
 
 
 
